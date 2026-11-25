@@ -148,6 +148,8 @@ export default class Settings extends View {
         ]))
         .child(card("use", "Usage bars", "Plan limits at the foot of the sidebar. Claude's come from your Claude Code login in the Keychain.", undefined, null, [
           row("Claude Code", toggle("use-claude", d.usage.claude, () => { d.usage.claude = !d.usage.claude; })),
+          row("Extra usage", toggle("use-extra", d.usage.extra !== false, () => { d.usage.extra = d.usage.extra === false; }),
+            "Claude's pay-as-you-go credits, when your plan has them on"),
           row("Codex", toggle("use-codex", d.usage.codex, () => { d.usage.codex = !d.usage.codex; })),
         ])))
       .child(h_flex().flex_none().px(20).py(12).gap(8).items_center().border_t(1).border_color(t.border)

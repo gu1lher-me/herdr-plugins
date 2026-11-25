@@ -71,7 +71,7 @@ minute). The installer writes it only when it's missing. New installs start with
 | Slack sweep | **off**; when on, hourly, 09–19, Sonnet | 30–45¢ a run on Sonnet |
 | Standup draft | **off**; when on, 23:00 on weekdays, Sonnet | about 25¢ a run |
 | Repo folders | the folders of the repos open in Herdr | |
-| Usage bars | Claude Code and Codex | free |
+| Usage bars | Claude Code (with its extra-usage credits when your plan has them on) and Codex | free |
 
 Jira also has **Site** (your `*.atlassian.net`; found and saved by the first check when empty), **JQL** (which issues
 to list; empty is `assignee = currentUser() AND statusCategory != Done`) and **Branch name** for Start from issue:
@@ -94,7 +94,7 @@ paying to fail; a free check of Claude Code's own "needs sign-in" list catches m
 | `cc-tasks` | side panel | For each tab of the shown space: goal, plan, decisions, assumptions, what's not done (from `.agents/tasks/`), plus changed files, commits and PR checks from git; a red box when the agent is waiting on you |
 | `cc-handoff` | dialog | Hand a Slack ask to an agent: a new one (plan mode) or a free one in this space, optionally searching Slack first; the message is editable |
 | `cc-standup` | pane | The standup draft as bullets: click to edit, × to drop, press-and-release on another bullet to move it there, ✦ or the box below to have Claude change one bullet or the whole draft; Undo (10 steps), Write now, Copy. Opened from the Inbox footer |
-| `cc-usage` | sidebar foot | Claude Code and Codex plan usage: a bar per limit window with its reset time; amber from 70%, red from 90%; click to refresh |
+| `cc-usage` | sidebar foot | Claude Code and Codex plan usage: a bar per limit window with its reset time, and Claude's extra-usage credits (spent of the monthly limit) when on; amber from 70%, red from 90% or a reached limit; click to refresh |
 | `cc-settings` | dialog | The settings above, with a daily cost estimate and the Bitbucket sign-in state |
 | `cc-status` | status bar | Status bar, and the only fetcher: writes `cc.github` (PRs from both hosts), `cc.bitbucket`, `cc.snippets`, `cc.jira` and `cc.slack` to shared state |
 
@@ -142,7 +142,10 @@ schedule leaves it alone; Write now still replaces it (Undo brings yours back). 
 Sonnet run with no tools, a few cents.
 
 Usage: Claude Code's numbers come from the usage endpoint `/usage` uses, with Claude Code's login read from the macOS
-Keychain (read only, never refreshed or stored), every 3 minutes, backing off to 15 after failures. Codex's come from
+Keychain (read only, never refreshed or stored), every 3 minutes, backing off to 15 after failures. When your plan has
+extra usage on (pay-as-you-go credits after its limits), a third bar shows what's spent of the monthly limit, red
+once it's reached; Settings → Usage bars → Extra usage hides it. Without extra usage nothing changes. Only the two
+amounts, the currency and the limit-reached flag are kept, in Herdr's local shared state. Codex's come from
 the newest session log under `~/.codex/sessions`, so they update when Codex runs.
 
 Branches link to issues by key: a branch is an issue's when the key appears in it as a whole token

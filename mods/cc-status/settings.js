@@ -19,7 +19,8 @@ export const DEFAULTS = {
   jira: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku", site: "", jql: "", branchPattern: "{key}-{slug}", keychain: "herdr-jira" },
   slack: { enabled: false, everyMin: 60, hours: [9, 19], model: "sonnet" },
   standup: { enabled: false, times: [23], weekdaysOnly: true, cutover: 18, model: "sonnet" },
-  usage: { claude: true, codex: true },
+  // extra: Claude's extra-usage credits as a bar too, shown only when the plan has them on.
+  usage: { claude: true, codex: true, extra: true },
   demo: false, // sample data and no fetching, for scripts/preview.mjs
 };
 

@@ -76,7 +76,7 @@
       ]
     },
     "cc.usage": {
-      "claude": { "at": 60, "error": null, "windows": [{ "label": "5-hour", "used": 42, "resetsAt": -7300 }, { "label": "Weekly", "used": 61, "resetsAt": -302400 }] },
+      "claude": { "at": 60, "error": null, "windows": [{ "label": "5-hour", "used": 42, "resetsAt": -7300 }, { "label": "Weekly", "used": 61, "resetsAt": -302400 }, { "label": "Extra usage", "used": 24.8, "resetsAt": null, "alert": false, "detail": "$12.40 of $50.00 monthly limit" }] },
       "codex": { "at": 60, "error": null, "windows": [{ "label": "Weekly", "used": 27, "resetsAt": -432000 }] }
     }
   },

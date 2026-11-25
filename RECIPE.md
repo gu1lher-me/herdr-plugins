@@ -29,7 +29,10 @@ usage bars.
   per piece of work: Jira key and space › tab, title, a status line with a dot, and buttons (Open, Fix CI, PR #,
   Start, Jira). Issues no tab works on, backlog ones too, sit in Todo. Filter chips by repo folder.
 - **Sidebar foot** (above Settings): "Claude" and "Codex", each limit as three lines: name and percentage, a 5 px
-  bar (`muted`, `working` from 70 %, `blocked` from 90 %), "resets on Mon 02:30" in `dim` 10.5 px.
+  bar (`muted`, `working` from 70 %, `blocked` from 90 %), "resets on Mon 02:30" in `dim` 10.5 px. Claude adds an
+  "Extra usage" bar when the plan's pay-as-you-go credits are on (`extra_usage` / `spend` in the usage endpoint's
+  answer, amounts in minor units): "$12.40 of $50.00 monthly limit", `blocked` when the limit is reached; "<1%"
+  for a share under one percent. No bar when they're off, absent or without a limit.
 - **Status bar**: machine, branch, agent count, then "2 Slack to do", "Slack 10m ago", "Jira 5m ago", "PRs just
   now" ("GitHub" when Bitbucket is off), **Settings**, the palette hint.
 - **Dialogs**: Start from issue, Hand to agent (Slack), Settings (with a daily cost estimate); the standup opens as

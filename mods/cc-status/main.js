@@ -127,7 +127,7 @@ export default class CcStatus extends View {
       const prev = shared("cc.usage") ?? {};
       const out = { ...prev };
       try {
-        out.claude = this.settings.usage.claude ? { windows: await claudeUsage(), at: Date.now(), error: null } : null;
+        out.claude = this.settings.usage.claude ? { windows: await claudeUsage({ extra: this.settings.usage.extra !== false }), at: Date.now(), error: null } : null;
         u.failures = 0;
       } catch (e) {
         u.failures = Math.min(u.failures + 1, 8);

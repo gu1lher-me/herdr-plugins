@@ -6,7 +6,8 @@ import { v_flex, h_flex } from "gpui-base";
 import { shared, setShared, theme, run } from "herdr";
 
 const AGENTS = [{ key: "claude", name: "Claude" }, { key: "codex", name: "Codex" }];
-const ROW = 44, HEAD = 22, PAD = 20, GAP = 8;
+// PAD: py(10) twice plus room for the last row's descenders, which 20 clipped.
+const ROW = 44, HEAD = 22, PAD = 26, GAP = 8;
 
 // "resets in 25m", "resets at 14:20" (today), "resets on Mon 02:29" (another day).
 function resets(at) {
@@ -37,16 +38,19 @@ export default class Usage extends View {
       cx.spawn(async () => { run("layout.resize", { id: "usage", px: Math.max(height, 1) }); });
     }
 
-    // Name and percentage (what you glance at), the bar, then when it frees up.
+    // Name and percentage (what you glance at), the bar, then when it frees up, or for extra-usage credits what's
+    // spent of the limit (detail; alert when the limit is reached).
     const bar = (w, key) => {
-      const color = w.used >= 90 ? t.blocked : w.used >= 70 ? t.working : t.muted;
+      const color = w.alert || w.used >= 90 ? t.blocked : w.used >= 70 ? t.working : t.muted;
+      const pct = w.used > 0 && w.used < 1 ? "<1%" : `${Math.round(w.used)}%`;
+      const below = w.detail || (w.resetsAt ? resets(w.resetsAt) : "");
       return v_flex().id(key).h(ROW).justify_center().gap(4)
         .child(h_flex().justify_between().text_size(11.5)
           .child(div().text_color(t.muted).child(w.label))
-          .child(div().font_medium().text_color(w.used >= 70 ? color : t.foreground).child(`${Math.round(w.used)}%`)))
+          .child(div().font_medium().text_color(w.alert || w.used >= 70 ? color : t.foreground).child(pct)))
         .child(div().h(5).w_full().rounded(3).bg(t.raised)
           .child(div().h(5).rounded(3).bg(color).w(`${Math.max(2, w.used)}%`)))
-        .when(Boolean(w.resetsAt), (el) => el.child(div().text_size(10.5).text_color(t.dim).truncate().child(resets(w.resetsAt))));
+        .when(Boolean(below), (el) => el.child(div().text_size(10.5).text_color(w.alert ? t.blocked : t.dim).truncate().child(below)));
     };
 
     return v_flex().id("cc-usage").size_full().px(14).py(10).gap(GAP).bg(t.chrome).border_t(1).border_color(t.border)
