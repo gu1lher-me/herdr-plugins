@@ -179,10 +179,10 @@
                       }
                     },
                     {
-                      "id": "linear",
+                      "id": "jira",
                       "type": "block",
                       "content": {
-                        "mod": "cc-linear"
+                        "mod": "cc-jira"
                       }
                     },
                     {

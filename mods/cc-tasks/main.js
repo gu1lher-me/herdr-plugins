@@ -19,11 +19,14 @@ function find(node, id) {
   return null;
 }
 
-// Same rule as cc-task.mjs: the Linear issue on the branch, else the space and tab.
+// The issue key as a whole token in a branch name: ENG-41 matches eng-41-fix and feature/ENG-41, not eng-412.
+const hasKey = (branch, key) => new RegExp(`(?:^|[^a-z0-9])${key.replace(/[^\w-]/g, "")}(?![0-9])`, "i").test(branch ?? "");
+
+// Same rule as cc-task.mjs: the Jira issue on the branch, else the space and tab.
 function keyOf(branch, space, tab) {
-  const issues = shared("cc.linear")?.issues ?? [];
+  const issues = shared("cc.jira")?.issues ?? [];
   const b = (branch ?? "").toLowerCase();
-  const hit = b && issues.find((i) => b === (i.branchName ?? "").toLowerCase() || b.includes(i.identifier.toLowerCase()));
+  const hit = b && issues.find((i) => b === (i.branchName ?? "").toLowerCase() || hasKey(b, i.identifier));
   if (hit) return { key: hit.identifier, issue: hit, file: `${hit.identifier}.md` };
   const teams = [...new Set(issues.map((i) => i.identifier.split("-")[0].toLowerCase()))];
   const m = b && teams.length ? b.match(new RegExp(`(?:^|[^a-z])(${teams.join("|")})-(\\d+)`)) : null;

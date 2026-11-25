@@ -5,7 +5,7 @@ import { spaces, panes, agents, run, openOverlay, theme, window, shared, layout,
 // Cloned from Herdr's `tabs` (0.1.15): the side-panel buttons are ours.
 const PANELS = [
   { id: "inbox", label: "Inbox", icon: "mods/cc-tabs/inbox.svg" },
-  { id: "linear", label: "Linear", icon: "mods/cc-tabs/linear.svg" },
+  { id: "jira", label: "Jira", icon: "mods/cc-tabs/jira.svg" },
   { id: "tasks", label: "Tasks", icon: "mods/cc-tabs/tasks.svg" },
   { id: "files", label: "Files", icon: "mods/files/file.svg" },
   { id: "changes", label: "Changes", icon: "mods/changes/changes.svg" },
@@ -20,10 +20,15 @@ function find(node, id) {
   return null;
 }
 
-// The Linear issue a tab works on, by its panes' branch (as cc-linear links them).
+// The Jira issue a tab works on, by its panes' branch (as cc-jira links them).
 function issueOf(tabId, issues, allPanes) {
   const branches = allPanes.filter((p) => p.tab === tabId && p.branch).map((p) => p.branch.toLowerCase());
-  return issues.find((i) => branches.some((b) => b === (i.branchName ?? "").toLowerCase() || b.includes(i.identifier.toLowerCase())))?.identifier ?? null;
+  return issues.find((i) => branches.some((b) => b === (i.branchName ?? "").toLowerCase() || hasKey(b, i.identifier)))?.identifier ?? null;
+}
+
+// The issue key as a whole token in a branch name: ENG-41 matches eng-41-fix and feature/ENG-41, not eng-412.
+function hasKey(branch, key) {
+  return new RegExp(`(?:^|[^a-z0-9])${key.replace(/[^\w-]/g, "")}(?![0-9])`, "i").test(branch ?? "");
 }
 
 // Keep in step with cc-inbox's sections.
@@ -95,7 +100,7 @@ export default class Tabs extends View {
       if (active >= 0) this.scroll.scroll_to_item(active);
     }
     const stop = (_e, cx) => cx.stop_propagation();
-    const issues = shared("cc.linear")?.issues ?? [], allPanes = panes();
+    const issues = shared("cc.jira")?.issues ?? [], allPanes = panes();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
@@ -157,8 +162,8 @@ export default class Tabs extends View {
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
-      // "I don't use Linear" (settings) hides its button.
-      .children(PANELS.filter((p) => p.id !== "linear" || shared("cc.settings")?.linear?.enabled !== false).map(panelButton))
+      // "I don't use Jira" (settings) hides its button.
+      .children(PANELS.filter((p) => p.id !== "jira" || shared("cc.settings")?.jira?.enabled !== false).map(panelButton))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));

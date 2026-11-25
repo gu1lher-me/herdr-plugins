@@ -10,7 +10,7 @@ const HOURS = [{ id: "9-19", label: "09–19", v: [9, 19] }, { id: "7-22", label
 const MODELS = [{ id: "haiku", label: "Haiku" }, { id: "sonnet", label: "Sonnet" }];
 const STANDUP_TIMES = [9, 10, 11, 12, 17, 18, 19, 21, 23];
 // Rough cost of one run, in dollars, from runs measured while building this; a guide, not a bill.
-const RUN = { linear: { haiku: 0.008, sonnet: 0.05 }, slack: { haiku: 0.06, sonnet: 0.35 }, standup: { haiku: 0.05, sonnet: 0.25 } };
+const RUN = { jira: { haiku: 0.008, sonnet: 0.05 }, slack: { haiku: 0.06, sonnet: 0.35 }, standup: { haiku: 0.05, sonnet: 0.25 } };
 
 const span = ([from, to]) => (from <= to ? to - from : 24 - from + to);
 const tilde = (p) => p.replace(home(), "~");
@@ -19,23 +19,28 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 
 export function dailyCost(s) {
   const runs = (x) => (x.enabled ? (span(x.hours) * 60) / x.everyMin : 0);
-  const linear = runs(s.linear) * RUN.linear[s.linear.model];
+  const jira = runs(s.jira) * RUN.jira[s.jira.model];
   const slack = runs(s.slack) * RUN.slack[s.slack.model];
   const standup = s.standup.enabled ? s.standup.times.length * RUN.standup[s.standup.model] : 0;
-  return { linear, slack, standup, total: linear + slack + standup };
+  return { jira, slack, standup, total: jira + slack + standup };
 }
 
 export default class Settings extends View {
   init(_props, cx) {
     const s = shared("cc.settings");
-    this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, linear: s.linear, slack: s.slack, standup: s.standup, usage: s.usage }) : null;
+    this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, jira: s.jira, slack: s.slack, standup: s.standup, usage: s.usage }) : null;
     this.roots = InputState.new({ value: (s?.repoRoots ?? []).map(tilde).join(", "), placeholder: "Leave empty: the folders of the repos open in Herdr" });
+    this.site = InputState.new({ value: s?.jira?.site ?? "", placeholder: "Leave empty: found on the first check (you.atlassian.net)" });
+    this.jql = InputState.new({ value: s?.jira?.jql ?? "", placeholder: "Leave empty: issues assigned to you that aren't done" });
     this.handle = cx.focus_handle();
   }
 
   save() {
     const roots = this.roots.value().split(",").map(untilde).filter(Boolean);
-    setShared("cc.settings.update", { patch: { ...this.draft, repoRoots: roots.length ? roots : null }, at: Date.now() });
+    // A pasted URL is fine: only its host is kept.
+    const site = this.site.value().trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const jira = { ...this.draft.jira, site, jql: this.jql.value().trim() };
+    setShared("cc.settings.update", { patch: { ...this.draft, jira, repoRoots: roots.length ? roots : null }, at: Date.now() });
     closeOverlay(props()?.overlay);
   }
 
@@ -74,23 +79,25 @@ export default class Settings extends View {
         .child(h_flex().items_center().child(div().flex_1().text_size(16).font_semibold().child("Command Center settings")).child(div().text_size(11).text_color(t.dim).child("Esc")))
         .child(div().text_size(12).text_color(cost.total > 5 ? t.working : t.muted).child(
           `About ${money(cost.total)} a day in Claude runs at these settings` +
-          ` (Slack ${money(cost.slack)}, Linear ${money(cost.linear)}, standup ${money(cost.standup)}). Task summaries add 1–2¢ per agent turn that changes code.`)))
+          ` (Slack ${money(cost.slack)}, Jira ${money(cost.jira)}, standup ${money(cost.standup)}). Task summaries add 1–2¢ per agent turn that changes code.`)))
       .child(v_flex().id("cc-settings-body").flex_1().min_h(0).overflow_y_scrollbar().px(20).py(14).gap(12)
         .child(card("gh", "GitHub", "PR checks for your spaces' branches and review requests, through gh. Free.", d.github.enabled, () => { d.github.enabled = !d.github.enabled; }, [
           row("Check every", seg("gh-every", [3, 5, 10].map((m) => ({ id: m, label: `${m} min` })), d.github.everyMin, (v) => { d.github.everyMin = v; })),
           row("Review requests", seg("gh-rev", [{ id: "direct", label: "Asked of me" }, { id: "all", label: "Including my teams" }], d.github.reviews, (v) => { d.github.reviews = v; })),
         ]))
-        .child(card("lin", "Linear", "Your open issues, through Claude's Linear connector.", d.linear.enabled, () => { d.linear.enabled = !d.linear.enabled; }, [
-          row("Check every", every("linear", [15, 30, 60])),
-          row("Between", hours("linear")),
-          row("Model", seg("lin-model", MODELS, d.linear.model, (v) => { d.linear.model = v; })),
+        .child(card("jira", "Jira", "Your open issues, through Claude's Atlassian connector.", d.jira.enabled, () => { d.jira.enabled = !d.jira.enabled; }, [
+          row("Check every", every("jira", [15, 30, 60])),
+          row("Between", hours("jira")),
+          row("Model", seg("jira-model", MODELS, d.jira.model, (v) => { d.jira.model = v; }), "Haiku is enough: it only runs the search"),
+          row("Site", Input.new(this.site).h(30).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5)),
+          row("JQL", Input.new(this.jql).h(30).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5), "Which issues to list"),
         ]))
         .child(card("sl", "Slack sweep", "Asks in your DMs and @-mentions, through Claude's Slack connector. Read only.", d.slack.enabled, () => { d.slack.enabled = !d.slack.enabled; }, [
           row("Sweep every", every("slack", [30, 60, 120])),
           row("Between", hours("slack")),
           row("Model", seg("sl-model", MODELS, d.slack.model, (v) => { d.slack.model = v; }), "Sonnet judges asks better"),
         ]))
-        .child(card("su", "Standup draft", "\"What did you accomplish?\" from commits, PRs, task notes, Linear and Slack.", d.standup.enabled, () => { d.standup.enabled = !d.standup.enabled; }, [
+        .child(card("su", "Standup draft", "\"What did you accomplish?\" from commits, PRs, task notes, Jira and Slack.", d.standup.enabled, () => { d.standup.enabled = !d.standup.enabled; }, [
           row("Write at", h_flex().gap(4).flex_wrap().children(STANDUP_TIMES.map((h) => {
             const on = d.standup.times.includes(h);
             return div().id(`su-t-${h}`).px(8).py(3).rounded(5).text_size(12).cursor_pointer().border_1()

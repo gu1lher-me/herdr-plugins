@@ -1,4 +1,4 @@
-// The Board: every piece of work as one card (agent + Linear issue + PR, joined by branch), in four columns.
+// The Board: every piece of work as one card (agent + Jira issue + PR, joined by branch), in four columns.
 // Click a card to select its tab (the Tasks panel shows its summary); Open goes to its terminal.
 
 import { View, div } from "gpui-kit";
@@ -11,16 +11,18 @@ const COLUMNS = [
   { id: "review", name: "In review", tone: "done" },
   { id: "todo", name: "Todo", tone: "dim" },
 ];
-const PRIORITY = { 1: "Urgent", 2: "High" };
+const PRIORITY = { 1: "Highest", 2: "High" };
 
 function since(ms) {
   if (!ms) return "";
   const m = Math.floor((Date.now() - ms) / 60_000);
   return m < 1 ? "<1m" : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
 }
+// The issue key as a whole token in a branch name: ENG-41 matches eng-41-fix and feature/ENG-41, not eng-412.
+const hasKey = (branch, key) => new RegExp(`(?:^|[^a-z0-9])${key.replace(/[^\w-]/g, "")}(?![0-9])`, "i").test(branch ?? "");
 const issueFor = (branch, issues) => {
   const b = (branch ?? "").toLowerCase();
-  return b ? issues.find((i) => b === (i.branchName ?? "").toLowerCase() || b.includes(i.identifier.toLowerCase())) ?? null : null;
+  return b ? issues.find((i) => b === (i.branchName ?? "").toLowerCase() || hasKey(b, i.identifier)) ?? null : null;
 };
 
 export default class Board extends View {
@@ -34,9 +36,9 @@ export default class Board extends View {
     });
   }
 
-  // One card per tab that has an agent, a Linear issue or a PR; then the issues no tab works on.
+  // One card per tab that has an agent, a Jira issue or a PR; then the issues no tab works on.
   cards() {
-    const issues = shared("cc.linear")?.issues ?? [];
+    const issues = shared("cc.jira")?.issues ?? [];
     const prs = shared("cc.github")?.prs ?? [];
     const snippets = shared("cc.snippets") ?? {};
     const all = panes(), list = agents(), out = [], used = new Set();
@@ -64,8 +66,9 @@ export default class Board extends View {
         else if (agent && !out[same].agent) out[same] = card;
       }
     }
+    // Backlog issues go in Todo too; their status ("Backlog") is on the card.
     for (const i of issues) {
-      if (used.has(i.identifier) || i.stateType === "backlog") continue;
+      if (used.has(i.identifier)) continue;
       out.push({ key: `i-${i.identifier}`, column: i.stateType === "started" ? "progress" : "todo", issue: i, title: i.title,
         status: `${i.state}${PRIORITY[i.priority] ? ` · ${PRIORITY[i.priority]}` : ""} · not started here` });
     }
@@ -123,7 +126,7 @@ export default class Board extends View {
       if (c.pr?.ci === "fail") actions.push(button(`fix-${c.key}`, "Fix CI", true, () => this.fixCi(c)));
       if (c.pr) actions.push(button(`pr-${c.key}`, `PR #${c.pr.number}`, false, () => exec("open", [c.pr.url])));
       if (!c.tab && c.issue) actions.push(button(`start-${c.key}`, "Start", true, () => openOverlay({ mod: "cc-start", kind: "dialog", width: 640, props: { issue: c.issue } })));
-      if (c.issue) actions.push(button(`lin-${c.key}`, "Linear", false, () => exec("open", [c.issue.url])));
+      if (c.issue) actions.push(button(`jira-${c.key}`, "Jira", false, () => exec("open", [c.issue.url])));
       return v_flex().id(c.key).w_full().p(10).gap(6).rounded(8).bg(t.background).border_1()
         .border_color(selected ? t.accent : c.column === "needs" ? t.blocked : t.border)
         .hover((s) => s.bg(t.hover)).on_click(() => (c.tab ? this.select(c) : c.issue && exec("open", [c.issue.url])))

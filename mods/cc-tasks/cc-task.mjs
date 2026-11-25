@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Task notes for agents in Herdr terminals. Files live in <repo>/.agents/tasks/ (kept out of git via info/exclude):
-//   <ISSUE>.md               notes the agent writes, for work on a Linear issue's branch
+//   <ISSUE>.md               notes the agent writes, for work on a Jira issue's branch
 //   <space>.md, "## <tab>"   the same without an issue: one file per space, a section per tab
 //   .summary/<key>.json      what the Tasks panel shows, rewritten after each turn that changed code
 //
@@ -37,12 +37,15 @@ function where(terminal) {
   return parts.length >= 2 ? { space: parts.slice(0, -1).join(" / "), tab: parts.at(-1) } : null;
 }
 
-// The Linear issue a branch belongs to: Linear's branch name, or an identifier of a team you have issues in.
+// The issue key as a whole token in a branch name: ENG-41 matches eng-41-fix and feature/ENG-41, not eng-412.
+const hasKey = (branch, key) => new RegExp(`(?:^|[^a-z0-9])${key.replace(/[^\w-]/g, "")}(?![0-9])`, "i").test(branch ?? "");
+
+// The Jira issue a branch belongs to: one of your issues' keys in it, or a key of a project you have issues in.
 function issueOf(branch) {
   if (!branch) return null;
-  const issues = readJson(join(APP, "shared.json"))?.["cc.linear"]?.issues ?? [];
+  const issues = readJson(join(APP, "shared.json"))?.["cc.jira"]?.issues ?? [];
   const b = branch.toLowerCase();
-  const hit = issues.find((i) => b === (i.branchName ?? "").toLowerCase() || b.includes(i.identifier.toLowerCase()));
+  const hit = issues.find((i) => b === (i.branchName ?? "").toLowerCase() || hasKey(b, i.identifier));
   if (hit) return { id: hit.identifier, title: hit.title };
   const teams = [...new Set(issues.map((i) => i.identifier.split("-")[0].toLowerCase()))];
   const m = teams.length ? b.match(new RegExp(`(?:^|[^a-z])(${teams.join("|")})-(\\d+)`)) : null;

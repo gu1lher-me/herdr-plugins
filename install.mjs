@@ -19,7 +19,10 @@ const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 const LAYOUT = "command-center";
 const MARKER = ".cc-managed";
 const SETTINGS = join(app, "command-center.json");
-const KEYS = { "cmd-alt-i": "cc-tabs.inbox", "cmd-alt-l": "cc-tabs.linear", "cmd-alt-t": "cc-tabs.tasks", "cmd-alt-1": "cc-tabs.terminals", "cmd-alt-2": "cc-tabs.board" };
+const KEYS = { "cmd-alt-i": "cc-tabs.inbox", "cmd-alt-j": "cc-tabs.jira", "cmd-alt-t": "cc-tabs.tasks", "cmd-alt-1": "cc-tabs.terminals", "cmd-alt-2": "cc-tabs.board" };
+// From before the switch to Jira: removed on install and uninstall if they're still ours.
+const OLD_MODS = ["cc-linear"];
+const OLD_KEYS = { "cmd-alt-l": "cc-tabs.linear" };
 const HOOK = "node ~/.config/herdr-app/mods/cc-tasks/cc-task.mjs hook";
 const RULE_HEADING = "## Task notes (Herdr)";
 const RULE = `${RULE_HEADING}
@@ -41,7 +44,17 @@ function editKeys(add) {
       else keys.global[key] = action;
     } else if (keys.global[key] === action) delete keys.global[key];
   }
+  for (const [key, action] of Object.entries(OLD_KEYS)) if (keys.global[key] === action) delete keys.global[key];
   writeFileSync(file, JSON.stringify(keys, null, 2) + "\n");
+}
+
+// Mod folders an earlier install left that this one no longer has (only ones it marked as its own).
+function removeOldMods() {
+  for (const m of OLD_MODS) {
+    if (!existsSync(join(app, "mods", m, MARKER))) continue;
+    rmSync(join(app, "mods", m), { recursive: true });
+    console.log(`  removed ${m} (replaced)`);
+  }
 }
 
 // The CLAUDE.md rule and the Stop hook that feed the Tasks panel. Adding twice changes nothing.
@@ -78,6 +91,7 @@ function editHooks(add) {
 if (args.has("--uninstall")) {
   for (const f of [`${LAYOUT}.json`, `${LAYOUT}.svg`]) rmSync(join(app, "layouts", f), { force: true });
   for (const m of mods) if (existsSync(join(app, "mods", m, MARKER))) rmSync(join(app, "mods", m), { recursive: true });
+  removeOldMods();
   editKeys(false);
   editHooks(false);
   console.log(`Removed. Kept your settings (${SETTINGS}) and data (${join(app, "data")}); delete them by hand if you like.`);
@@ -102,6 +116,7 @@ for (const m of mods) {
   cpSync(join(here, "mods", m), target, { recursive: true });
   writeFileSync(join(target, MARKER), "Installed from herdr-plugins; replaced on every install.\n");
 }
+removeOldMods();
 editKeys(true);
 if (args.has("--hooks")) editHooks(true);
 
