@@ -8,8 +8,9 @@ export const DEFAULTS = {
   repoRoots: null, // null: the parent folders of the repos open in Herdr
   github: { enabled: true, everyMin: 3, reviews: "direct" },
   // site: the Jira host (you.atlassian.net); empty, the first fetch finds it and saves it. jql: empty for the default,
-  // your unresolved issues (DEFAULT_JQL in cc-status/jira.js).
-  jira: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku", site: "", jql: "" },
+  // your unresolved issues (DEFAULT_JQL in cc-status/jira.js). branchPattern: Start's new branch name, with {key}
+  // (eng-412), {KEY} (ENG-412) and {slug} (the title), e.g. "feature/jd/{key}-{slug}".
+  jira: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku", site: "", jql: "", branchPattern: "{key}-{slug}" },
   slack: { enabled: false, everyMin: 60, hours: [9, 19], model: "sonnet" },
   standup: { enabled: false, times: [23], weekdaysOnly: true, cutover: 18, model: "sonnet" },
   usage: { claude: true, codex: true },

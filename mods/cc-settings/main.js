@@ -32,6 +32,7 @@ export default class Settings extends View {
     this.roots = InputState.new({ value: (s?.repoRoots ?? []).map(tilde).join(", "), placeholder: "Leave empty: the folders of the repos open in Herdr" });
     this.site = InputState.new({ value: s?.jira?.site ?? "", placeholder: "Leave empty: found on the first check (you.atlassian.net)" });
     this.jql = InputState.new({ value: s?.jira?.jql ?? "", placeholder: "Leave empty: issues assigned to you that aren't done" });
+    this.branch = InputState.new({ value: s?.jira?.branchPattern ?? "", placeholder: "{key}-{slug}" });
     this.handle = cx.focus_handle();
   }
 
@@ -39,7 +40,7 @@ export default class Settings extends View {
     const roots = this.roots.value().split(",").map(untilde).filter(Boolean);
     // A pasted URL is fine: only its host is kept.
     const site = this.site.value().trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-    const jira = { ...this.draft.jira, site, jql: this.jql.value().trim() };
+    const jira = { ...this.draft.jira, site, jql: this.jql.value().trim(), branchPattern: this.branch.value().trim() || "{key}-{slug}" };
     setShared("cc.settings.update", { patch: { ...this.draft, jira, repoRoots: roots.length ? roots : null }, at: Date.now() });
     closeOverlay(props()?.overlay);
   }
@@ -91,6 +92,8 @@ export default class Settings extends View {
           row("Model", seg("jira-model", MODELS, d.jira.model, (v) => { d.jira.model = v; }), "Haiku is enough: it only runs the search"),
           row("Site", Input.new(this.site).h(30).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5)),
           row("JQL", Input.new(this.jql).h(30).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5), "Which issues to list"),
+          row("Branch name", Input.new(this.branch).h(30).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5),
+            "For Start: {key} eng-412, {KEY} ENG-412, {slug} the title"),
         ]))
         .child(card("sl", "Slack sweep", "Asks in your DMs and @-mentions, through Claude's Slack connector. Read only.", d.slack.enabled, () => { d.slack.enabled = !d.slack.enabled; }, [
           row("Sweep every", every("slack", [30, 60, 120])),

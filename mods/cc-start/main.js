@@ -32,9 +32,12 @@ async function mainOf(root) {
 }
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
-// The issue key stays uppercase (ENG-412-retry-webhooks): Jira links a branch, its commits and PRs to an issue only
-// when the key is written that way.
-const branchOf = (i) => i.branchName || `${i.identifier.toUpperCase()}-${slug(i.title)}`;
+// A new branch's name, from settings' jira.branchPattern: {key} is the issue key in lowercase (eng-412), {KEY} as
+// Jira writes it (ENG-412), {slug} the title (retry-webhooks). Default "{key}-{slug}"; a team convention such as
+// "feature/jd/{key}-{slug}" goes in settings.
+const BRANCH_PATTERN = "{key}-{slug}";
+const branchOf = (i) => i.branchName || (shared("cc.settings")?.jira?.branchPattern || BRANCH_PATTERN)
+  .replaceAll("{key}", i.identifier.toLowerCase()).replaceAll("{KEY}", i.identifier).replaceAll("{slug}", slug(i.title));
 const shortTitle = (s) => s.split(/\s+/).reduce((acc, w) => (acc.length + w.length < 26 ? `${acc} ${w}`.trim() : acc), "");
 
 // The issue list (cc.jira) holds only the start of each description, so the whole issue is read when the dialog
