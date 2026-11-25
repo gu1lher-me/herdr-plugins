@@ -1,4 +1,4 @@
-// Start from a Linear issue: a worktree (or a tab) with an agent whose first message is the issue.
+// Start from a Jira issue: a worktree (or a tab) with an agent whose first message is the issue.
 // props: { issue, overlay }
 
 import { View, div } from "gpui-kit";
@@ -32,17 +32,25 @@ async function mainOf(root) {
 }
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+// The issue key stays uppercase (ENG-412-retry-webhooks): Jira links a branch, its commits and PRs to an issue only
+// when the key is written that way.
+const branchOf = (i) => i.branchName || `${i.identifier.toUpperCase()}-${slug(i.title)}`;
 const shortTitle = (s) => s.split(/\s+/).reduce((acc, w) => (acc.length + w.length < 26 ? `${acc} ${w}`.trim() : acc), "");
 
-// The issue list (cc.linear) holds only the start of each description, so the whole issue is read when the dialog
-// opens. A headless Claude run calls Linear; the text comes from the tools' own answers in its stream, never from
-// what the model writes back.
-const ISSUE_TOOLS = ["ToolSearch", "mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_comments"];
-const issuePrompt = (id) => `Load the Linear tools with ToolSearch. Call get_issue for ${id}. Call list_comments for ${id} with limit 250, and again with the returned cursor while hasNextPage is true.
-Read only: never create, change or comment on anything. Reply with just: done.`;
+// The issue list (cc.jira) holds only the start of each description, so the whole issue is read when the dialog
+// opens. A headless Claude run calls Jira; the text comes from the tool's own answer in its stream, never from
+// what the model writes back. One getJiraIssue call brings the description and the comments.
+// The connector's tool prefix: keep in step with JIRA_CONNECTOR in cc-status/jira.js.
+const ISSUE_TOOLS = ["ToolSearch", "mcp__claude_ai_Atlassian__getJiraIssue"];
+const issuePrompt = (id, site) => `Load the Jira issue tool with ToolSearch (query "get jira issue"). Call getJiraIssue with cloudId ${JSON.stringify(site)}, issueIdOrKey ${JSON.stringify(id)}, fields ["summary","description","comment"] and responseContentFormat "markdown".
+Read only: never create, change, transition or comment on anything. Reply with just: done.`;
+
+// Jira's markdown wraps links it shows as cards in <custom data-type="smartlink">url</custom>: keep the url.
+const plain = (s) => String(s ?? "").replace(/<custom\b[^>]*>([^]*?)<\/custom>/g, "$1").trim();
+const hostOf = (url) => { try { return new URL(url).host; } catch { return ""; } };
 
 function readIssue(stdout, id) {
-  const calls = new Map(), pages = [];
+  const calls = new Map();
   let issue = null, said = "";
   for (const line of stdout.split("\n")) {
     let m;
@@ -50,25 +58,29 @@ function readIssue(stdout, id) {
     if (m.type === "result") said = String(m.result ?? "");
     for (const c of Array.isArray(m.message?.content) ? m.message.content : []) {
       if (c.type === "tool_use") calls.set(c.id, c);
-      if (c.type !== "tool_result") continue;
-      const call = calls.get(c.tool_use_id);
+      if (c.type !== "tool_result" || c.is_error || !calls.get(c.tool_use_id)?.name.endsWith("__getJiraIssue")) continue;
       let data;
       try { data = JSON.parse(typeof c.content === "string" ? c.content : (c.content ?? []).map((x) => x.text ?? "").join("")); } catch { continue; }
-      if (call?.name.endsWith("__get_issue") && String(data.id).toUpperCase() === id.toUpperCase() && typeof data.title === "string") issue = data;
-      if (call?.name.endsWith("__list_comments") && Array.isArray(data.comments)) pages.push({ of: String(call.input?.issueId ?? ""), ...data });
+      // The connector answers { issues: { nodes: [issue] } }; a bare issue is accepted too.
+      const node = data?.issues?.nodes?.[0] ?? (data?.key ? data : null);
+      if (String(node?.key ?? "").toUpperCase() === id.toUpperCase()) issue = node;
     }
   }
   if (!issue) throw new Error(/^done\.?$/i.test(said.trim()) ? "" : said.split("\n")[0].slice(0, 160));
-  const mine = pages.filter((p) => [id.toUpperCase(), String(issue.uuid).toUpperCase()].includes(p.of.toUpperCase()));
-  const comments = [...new Map(mine.flatMap((p) => p.comments).map((c) => [c.id, c])).values()]
+  const f = issue.fields ?? {}, thread = f.comment ?? {};
+  const comments = (thread.comments ?? [])
+    .map((c) => ({ author: { name: c.author?.displayName }, createdAt: c.created, body: plain(c.body) }))
     .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
-  return { description: issue.description ?? "", comments, partial: !mine.length || Boolean(mine[mine.length - 1].hasNextPage) };
+  const description = typeof f.description === "string" ? plain(f.description) : "";
+  return { description, comments, partial: Number(thread.total ?? 0) > comments.length };
 }
 
-async function fetchIssue(id) {
+async function fetchIssue(issue) {
+  const id = issue.identifier;
+  const site = shared("cc.settings")?.jira?.site || shared("cc.jira")?.site || hostOf(issue.url);
   const dir = `${appHome()}/data/cc-claude`;
   await exec("mkdir", ["-p", dir]);
-  const r = await exec(`${home()}/.local/bin/claude`, ["-p", issuePrompt(id), "--model", "haiku", "--tools", "ToolSearch", "--allowedTools", ISSUE_TOOLS.join(","),
+  const r = await exec(`${home()}/.local/bin/claude`, ["-p", issuePrompt(id, site), "--model", "haiku", "--tools", "ToolSearch", "--allowedTools", ISSUE_TOOLS.join(","),
     "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--max-budget-usd", "0.3"], { cwd: dir, timeout: 120_000 });
   try { return readIssue(r.stdout ?? "", id); }
   catch (e) { throw new Error(e.message || (r.stderr ?? "").trim().split("\n")[0].slice(0, 160) || `claude exited ${r.code}`); }
@@ -80,12 +92,12 @@ function firstMessage(i, full) {
   const tail = `Keep notes on your plan, decisions and assumptions as you go. When done, open a PR titled "${i.identifier}: …" and stop.`;
   if (!full) {
     const start = (i.description ?? "").trim();
-    return [head, "The full issue couldn't be loaded from Linear when this started. Read it there first (description, comments, attachments); if you can't, stop and say so.",
+    return [head, "The full issue couldn't be loaded from Jira when this started. Read it there first (description, comments, attachments); if you can't, stop and say so.",
       start && `All that is copied here is the start of its description:\n\n${start}…`, tail].filter(Boolean).join("\n\n");
   }
   const said = full.comments.map((c) => `${c.author?.name ?? "Someone"}, ${String(c.createdAt).slice(0, 10)}:\n${String(c.body ?? "").trim()}`).join("\n\n");
   return [head, full.description.trim(), said && `Comments, oldest first:\n\n${said}`, full.partial && "Some comments may be missing here.",
-    "The description and comments above were copied from Linear when this started. Before planning, read the issue in Linear yourself if you can, for its images, attachments and anything added since.",
+    "The description and comments above were copied from Jira when this started. Before planning, read the issue in Jira yourself if you can, for its images, attachments and anything added since.",
     tail].filter(Boolean).join("\n\n");
 }
 
@@ -120,12 +132,12 @@ export default class Start extends View {
 
   load(cx) {
     const i = props().issue;
-    // Demo issues (scripts/preview.mjs) aren't in Linear.
+    // Demo issues (scripts/preview.mjs) aren't in Jira.
     if (shared("cc.settings")?.demo) return this.message.set_value(firstMessage(i, { description: i.description ?? "", comments: [] }));
     this.loading = true;
     this.loadError = "";
     cx.spawn(async (cx) => {
-      try { this.message.set_value(firstMessage(i, await fetchIssue(i.identifier))); }
+      try { this.message.set_value(firstMessage(i, await fetchIssue(i))); }
       catch (e) {
         this.loadError = String(e?.message ?? e).replace(/\.$/, "");
         this.message.set_value(firstMessage(i, null));
@@ -211,14 +223,14 @@ export default class Start extends View {
     const agent = this.agents.find((a) => a.key === this.agent);
     const name = `${i.identifier} ${shortTitle(i.title)}`;
     const argv = !agent?.run ? null : agent.key === "claude" ? [...agent.run, "--permission-mode", this.mode] : [...agent.run];
-    const move = () => { if (this.move) setShared("cc.linear.move", { identifier: i.identifier, at: Date.now() }); };
+    const move = () => { if (this.move) setShared("cc.jira.move", { identifier: i.identifier, at: Date.now() }); };
     if (this.where === "worktree") {
       const path = this.worktreePath();
       this.busy = true;
       this.error = "";
       cx.notify();
       cx.spawn(async (cx) => {
-        this.error = await this.addWorktree(i.branchName || `${i.identifier.toLowerCase()}-${slug(i.title)}`, path);
+        this.error = await this.addWorktree(branchOf(i), path);
         this.busy = false;
         if (this.error) return cx.notify();
         // The first message goes on the agent's command line.
@@ -254,7 +266,7 @@ export default class Start extends View {
       .child(div().size(14).rounded(3).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
         .text_size(10).text_color(t.accent_foreground).text_center().child(on ? "✓" : ""))
       .child(div().text_size(12.5).child(text));
-    const branch = i.branchName || `${i.identifier.toLowerCase()}-${slug(i.title)}`;
+    const branch = branchOf(i);
     const ready = Boolean(this.repo);
     const waiting = Boolean(this.loading) && this.agent !== "shell";
 
@@ -297,10 +309,10 @@ export default class Start extends View {
       .when(this.agent === "claude", (el) => el.child(label("START IN")).child(seg("mode", MODES, this.mode, (v) => { this.mode = v; })))
       .when(this.agent !== "shell", (el) => el.child(label("FIRST MESSAGE"))
         .when(Boolean(this.loading), (el) => el.child(div().h(150).px(10).py(8).rounded(8).border_1().border_color(t.input).bg(t.background)
-          .text_size(12.5).text_color(t.dim).child("Loading the full issue from Linear…")))
+          .text_size(12.5).text_color(t.dim).child("Loading the full issue from Jira…")))
         .when(!this.loading, (el) => el.child(Textarea.new(this.message).h(150).px(10).py(8).rounded(8).border_1().border_color(t.input).bg(t.background).text_size(12.5)))
         .when(Boolean(this.loadError) && !this.loading, (el) => el.child(h_flex().pt(6).gap(8).items_start().text_size(11.5)
-          .child(div().flex_1().min_w(0).text_color(t.blocked).child(`Couldn't load the full issue from Linear: ${this.loadError}. Starting now sends only the start of its description, marked as incomplete.`))
+          .child(div().flex_1().min_w(0).text_color(t.blocked).child(`Couldn't load the full issue from Jira: ${this.loadError}. Starting now sends only the start of its description, marked as incomplete.`))
           .child(div().id("issue-retry").flex_none().cursor_pointer().text_color(t.foreground).on_click((_e, cx) => { this.load(cx); cx.notify(); }).child("Retry")))))
       .when(i.stateType !== "started", (el) => el.child(div().pt(14).child(check("move", this.move, `Move ${i.identifier} to In Progress`, () => { this.move = !this.move; }))))
       .when(Boolean(this.error), (el) => el.child(div().pt(10).text_size(11.5).text_color(t.blocked).child(this.error)))
