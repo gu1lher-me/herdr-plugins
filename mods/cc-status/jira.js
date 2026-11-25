@@ -11,7 +11,7 @@ export const jiraTool = (name) => `${T}${name}`;
 
 export const JIRA_TIMEOUT = 240_000;
 export const JIRA_READ = ["ToolSearch", `${T}searchJiraIssuesUsingJql`, `${T}getAccessibleAtlassianResources`];
-export const JIRA_WRITE = ["ToolSearch", `${T}getTransitionsForJiraIssue`, `${T}transitionJiraIssue`];
+export const JIRA_WRITE = ["ToolSearch", `${T}getTransitionsForJiraIssue`, `${T}transitionJiraIssue`, `${T}getAccessibleAtlassianResources`];
 export const DEFAULT_JQL = "assignee = currentUser() AND statusCategory != Done ORDER BY priority DESC, updated DESC";
 const FIELDS = ["summary", "status", "priority", "issuetype", "description", "project", "updated"];
 const MAX_PAGES = 4;

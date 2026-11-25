@@ -396,7 +396,7 @@ export default class CcStatus extends View {
   // is read from transitionJiraIssue's own result, not from what the model says.
   moveToStarted(cx, identifier) {
     cx.spawn(async (cx) => {
-      const prompt = movePrompt({ site: this.settings.jira.site, identifier });
+      const prompt = movePrompt({ site: this.settings.jira.site || shared("cc.jira")?.site || "", identifier });
       const r = await this.claude(prompt, JIRA_WRITE, [], 180_000, "haiku", "0.5", "stream-json").catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
       const { ok, said } = readMove(r.stdout);
       notify({ title: ok ? `${identifier} moved to In Progress` : `Couldn't move ${identifier}`, body: ok ? undefined : (said || r.stderr || "").slice(0, 160), level: ok ? "success" : "warning" });
