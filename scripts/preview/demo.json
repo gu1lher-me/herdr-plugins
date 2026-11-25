@@ -45,16 +45,16 @@
     "standup": { "enabled": true, "times": [23] }
   },
   "shared": {
-    "cc.linear": {
+    "cc.jira": {
       "at": 300,
       "issues": [
-        { "identifier": "ENG-412", "title": "Retry webhook deliveries with backoff", "state": "In Progress", "stateType": "started", "priority": 2, "url": "https://linear.app/acme/issue/ENG-412", "branchName": "eng-412-retry-webhooks", "project": "Platform" },
-        { "identifier": "ENG-431", "title": "Rate-limit the public API", "state": "In Progress", "stateType": "started", "priority": 1, "url": "https://linear.app/acme/issue/ENG-431", "branchName": "eng-431-rate-limit", "project": "Platform" },
-        { "identifier": "ENG-405", "title": "Notification settings tab", "state": "In Review", "stateType": "started", "priority": 3, "url": "https://linear.app/acme/issue/ENG-405", "branchName": "eng-405-notification-settings", "project": "Web" },
-        { "identifier": "ENG-377", "title": "Resumable backfill for the events table", "state": "In Review", "stateType": "started", "priority": 3, "url": "https://linear.app/acme/issue/ENG-377", "branchName": "eng-377-resumable-backfill", "project": "Data" },
-        { "identifier": "ENG-440", "title": "Export the audit log as CSV", "state": "Todo", "stateType": "unstarted", "priority": 2, "url": "https://linear.app/acme/issue/ENG-440", "branchName": "eng-440-audit-export", "project": "Platform", "description": "Admins need to download the audit log for compliance reviews. CSV, filtered by date range and actor." },
-        { "identifier": "ENG-442", "title": "Flaky test: checkout total with coupons", "state": "Todo", "stateType": "unstarted", "priority": 4, "url": "https://linear.app/acme/issue/ENG-442", "branchName": "eng-442-flaky-coupon-test", "project": "Web" },
-        { "identifier": "ENG-450", "title": "Dark mode for the docs site", "state": "Backlog", "stateType": "backlog", "priority": 0, "url": "https://linear.app/acme/issue/ENG-450", "branchName": "eng-450-docs-dark-mode", "project": "Docs" }
+        { "identifier": "ENG-412", "title": "Retry webhook deliveries with backoff", "state": "In Progress", "stateType": "started", "priority": 2, "url": "https://acme.atlassian.net/browse/ENG-412", "project": "Platform" },
+        { "identifier": "ENG-431", "title": "Rate-limit the public API", "state": "In Progress", "stateType": "started", "priority": 1, "url": "https://acme.atlassian.net/browse/ENG-431", "project": "Platform" },
+        { "identifier": "ENG-405", "title": "Notification settings tab", "state": "In Review", "stateType": "started", "priority": 3, "url": "https://acme.atlassian.net/browse/ENG-405", "project": "Web" },
+        { "identifier": "ENG-377", "title": "Resumable backfill for the events table", "state": "In Review", "stateType": "started", "priority": 3, "url": "https://acme.atlassian.net/browse/ENG-377", "project": "Data" },
+        { "identifier": "ENG-440", "title": "Export the audit log as CSV", "state": "Todo", "stateType": "unstarted", "priority": 2, "url": "https://acme.atlassian.net/browse/ENG-440", "project": "Platform", "description": "Admins need to download the audit log for compliance reviews. CSV, filtered by date range and actor." },
+        { "identifier": "ENG-442", "title": "Flaky test: checkout total with coupons", "state": "Todo", "stateType": "unstarted", "priority": 4, "url": "https://acme.atlassian.net/browse/ENG-442", "project": "Web" },
+        { "identifier": "ENG-450", "title": "Dark mode for the docs site", "state": "Backlog", "stateType": "backlog", "priority": 0, "url": "https://acme.atlassian.net/browse/ENG-450", "project": "Docs" }
       ]
     },
     "cc.github": {

@@ -1,5 +1,5 @@
 // One ranked list of what needs you: blocked and finished agents, Slack asks, failed CI, review requests.
-// Agents come live from Herdr; GitHub, Slack and screen snippets from cc-status via shared state.
+// Agents come live from Herdr; PRs (GitHub and Bitbucket), Slack and screen snippets from cc-status via shared state.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -9,7 +9,7 @@ const FILTERS = [
   { id: "all", label: "All" },
   { id: "agents", label: "Agents" },
   { id: "slack", label: "Slack" },
-  { id: "github", label: "GitHub" },
+  { id: "github", label: "PRs" }, // GitHub and Bitbucket alike
 ];
 const SECTIONS = ["NEEDS YOU NOW", "REVIEW", "NEW FOR YOU"];
 
@@ -182,7 +182,7 @@ export default class Inbox extends View {
         .children(body)
         .when(body.length === 0, (el) => el.child(v_flex().p(24).gap(4).items_center()
           .child(div().text_color(t.muted).child(filter === "slack" ? "No Slack asks waiting on you" : "Nothing needs you"))
-          .child(div().text_size(11.5).text_color(t.dim).child(`Agents update live; GitHub every ${st.github?.everyMin ?? 3} minutes${slackOn ? `; Slack every ${every}` : ""}`)))))
+          .child(div().text_size(11.5).text_color(t.dim).child(`Agents update live; PRs every ${st.github?.everyMin ?? 3} minutes${slackOn ? `; Slack every ${every}` : ""}`)))))
       .child(this.standupFooter(t, button));
   }
 
