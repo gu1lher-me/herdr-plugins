@@ -3,6 +3,7 @@
 
 import { exec, readTextFile, shared, home, appHome } from "herdr";
 import { jiraTool, siteStep } from "./jira.js";
+import { bitbucketRemote } from "./bitbucket.js";
 
 export const STANDUP_TIMEOUT = 420_000;
 export const STANDUP_TOOLS = [
@@ -50,7 +51,9 @@ export function standupSlot(now = new Date(), hours = [23], weekdaysOnly = true)
   return null;
 }
 
-async function repos() {
+// Git repos under the repo folders and Herdr's worktrees, three levels deep. cc-status also uses it to find the
+// Bitbucket repos to ask for review requests.
+export async function localRepos() {
   const roots = shared("cc.settings")?.roots ?? [];
   const found = new Set();
   for (const dir of [...roots, `${home()}/.herdr/worktrees`]) {
@@ -60,12 +63,18 @@ async function repos() {
   return [...found];
 }
 
-// Commits, PRs and task summaries from the window, as plain lines for the prompt.
-export async function gatherLocal(win) {
+// Commits, PRs and task summaries from the window, as plain lines for the prompt. bb: a Bitbucket session (or
+// null), for your PRs in repos on bitbucket.org; github: whether to ask gh for your GitHub PRs.
+export async function gatherLocal(win, bb = null, github = true) {
   const since = new Date(win.from).toISOString(), until = new Date(win.to).toISOString();
-  const commits = [], tasks = [];
-  const seen = new Set();
-  for (const repo of await repos()) {
+  const commits = [], tasks = [], prs = [];
+  const seen = new Set(), asked = new Set();
+  for (const repo of await localRepos()) {
+    if (bb) {
+      const remote = bitbucketRemote((await exec("git", ["remote", "get-url", "origin"], { cwd: repo }).catch(() => null))?.stdout);
+      const key = remote && `${remote.workspace}/${remote.repo}`;
+      if (remote && !asked.has(key)) { asked.add(key); prs.push(...(await bb.mine(remote, win.from, win.to).catch(() => []))); }
+    }
     const email = (await exec("git", ["config", "user.email"], { cwd: repo }).catch(() => null))?.stdout.trim();
     if (email) {
       const r = await exec("git", ["log", "--all", `--author=${email}`, `--since=${since}`, `--until=${until}`, "--no-merges", "--pretty=%h %s", "-n", "25"], { cwd: repo, timeout: 15_000 }).catch(() => null);
@@ -83,8 +92,7 @@ export async function gatherLocal(win) {
       tasks.push(`${s.title}: ${s.goal}${done.length ? ` Done: ${done.join("; ")}` : ""}${s.notDone?.length ? ` Open: ${s.notDone.slice(0, 2).join("; ")}` : ""}`);
     }
   }
-  const prs = [];
-  const r = await exec("gh", ["search", "prs", "--author=@me", `--updated=${win.date}..${win.date}`, "--json", "number,title,url,repository,state,isDraft", "--limit", "30"], { timeout: 20_000 }).catch(() => null);
+  const r = github ? await exec("gh", ["search", "prs", "--author=@me", `--updated=${win.date}..${win.date}`, "--json", "number,title,url,repository,state,isDraft", "--limit", "30"], { timeout: 20_000 }).catch(() => null) : null;
   try {
     for (const p of JSON.parse(r?.stdout || "[]")) prs.push(`${p.repository?.name ?? ""} #${p.number} ${p.title} (${p.isDraft ? "draft" : p.state.toLowerCase()}) ${p.url}`);
   } catch { /* gh missing or not logged in: the draft goes without PRs */ }

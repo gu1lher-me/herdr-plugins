@@ -7,6 +7,9 @@ import * as fs from "fs/promises";
 export const DEFAULTS = {
   repoRoots: null, // null: the parent folders of the repos open in Herdr
   github: { enabled: true, everyMin: 3, reviews: "direct" },
+  // Repos on bitbucket.org, through Bitbucket's API, checked with GitHub's interval. keychain: the Keychain item
+  // (service name) holding a Bitbucket-scoped Atlassian API token, with your Atlassian email as its account.
+  bitbucket: { enabled: true, keychain: "herdr-bitbucket" },
   // site: the Jira host (you.atlassian.net); empty, the first fetch finds it and saves it. jql: empty for the default,
   // your unresolved issues (DEFAULT_JQL in cc-status/jira.js). branchPattern: Start's new branch name, with {key}
   // (eng-412), {KEY} (ENG-412) and {slug} (the title), e.g. "feature/jd/{key}-{slug}".

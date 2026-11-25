@@ -28,7 +28,7 @@ export function dailyCost(s) {
 export default class Settings extends View {
   init(_props, cx) {
     const s = shared("cc.settings");
-    this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, jira: s.jira, slack: s.slack, standup: s.standup, usage: s.usage }) : null;
+    this.draft = s ? clone({ repoRoots: s.repoRoots, github: s.github, bitbucket: s.bitbucket, jira: s.jira, slack: s.slack, standup: s.standup, usage: s.usage }) : null;
     this.roots = InputState.new({ value: (s?.repoRoots ?? []).map(tilde).join(", "), placeholder: "Leave empty: the folders of the repos open in Herdr" });
     this.site = InputState.new({ value: s?.jira?.site ?? "", placeholder: "Leave empty: found on the first check (you.atlassian.net)" });
     this.jql = InputState.new({ value: s?.jira?.jql ?? "", placeholder: "Leave empty: issues assigned to you that aren't done" });
@@ -43,6 +43,19 @@ export default class Settings extends View {
     const jira = { ...this.draft.jira, site, jql: this.jql.value().trim(), branchPattern: this.branch.value().trim() || "{key}-{slug}" };
     setShared("cc.settings.update", { patch: { ...this.draft, jira, repoRoots: roots.length ? roots : null }, at: Date.now() });
     closeOverlay(props()?.overlay);
+  }
+
+  // Signed in, no token yet (with how to add one), or what went wrong: from cc-status's last PR check.
+  bitbucketStatus(t, keychain) {
+    const b = shared("cc.bitbucket") ?? {};
+    const line = (text, color) => div().text_size(12).text_color(color).line_height(1.5).child(text);
+    if (b.user) return line(`Signed in as ${b.user}. Token: Keychain item "${keychain}".`, t.muted);
+    if (b.error) return line(`${b.error}. The token is the Keychain item "${keychain}".`, t.blocked);
+    return v_flex().gap(4)
+      .child(line(b.missing ? `No token yet: nothing is checked until there is one.` : "Not checked yet: it's read at the next PR check.", t.muted))
+      .child(line(`Make an Atlassian API token with scopes, app Bitbucket (read:user, read:repository, read:pullrequest, read:pipeline), copy it, then run in Terminal:`, t.dim))
+      .child(div().text_size(11.5).font_family("monospace").text_color(t.foreground)
+        .child(`printf 'add-generic-password -U -s ${keychain} -a YOUR_ATLASSIAN_EMAIL -w %s\\n' "$(pbpaste)" | security -i; pbcopy < /dev/null`));
   }
 
   render() {
@@ -86,6 +99,8 @@ export default class Settings extends View {
           row("Check every", seg("gh-every", [3, 5, 10].map((m) => ({ id: m, label: `${m} min` })), d.github.everyMin, (v) => { d.github.everyMin = v; })),
           row("Review requests", seg("gh-rev", [{ id: "direct", label: "Asked of me" }, { id: "all", label: "Including my teams" }], d.github.reviews, (v) => { d.github.reviews = v; })),
         ]))
+        .child(card("bb", "Bitbucket", "PR checks for repos on bitbucket.org and review requests in your repo folders, through Bitbucket's API. Free; checked as often as GitHub.",
+          d.bitbucket.enabled, () => { d.bitbucket.enabled = !d.bitbucket.enabled; }, [this.bitbucketStatus(t, d.bitbucket.keychain)]))
         .child(card("jira", "Jira", "Your open issues, through Claude's Atlassian connector.", d.jira.enabled, () => { d.jira.enabled = !d.jira.enabled; }, [
           row("Check every", every("jira", [15, 30, 60])),
           row("Between", hours("jira")),

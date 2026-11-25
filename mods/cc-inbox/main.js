@@ -21,6 +21,12 @@ function since(ms) {
 const clock = (ms) => new Date(ms).toTimeString().slice(0, 5);
 
 const openUrl = (url) => url && exec("open", [url]);
+// Fix CI's first message: plain words rather than a /fix-ci command, so it works with no such command installed
+// and for GitHub and Bitbucket alike. Keep in step with cc-board.
+const fixCiTask = (p) => {
+  const checks = (p.failed ?? []).map((f) => `${f.name}${f.url ? ` (${f.url})` : ""}`).join(", ") || "a check";
+  return `CI failed on PR #${p.number} (${p.url}): ${checks}. Read the failing check's log; if its link needs a login you don't have, ask me to paste the log. Find the cause, fix it on this branch and run the relevant tests locally. Don't push: tell me what you changed.`;
+};
 const CLOSED = { you: "done", sweep: "you replied", skipped: "skipped" };
 const slackAction = (op, ids) => setShared("cc.slack.action", { op, ids, at: Date.now() });
 
@@ -38,8 +44,7 @@ export default class Inbox extends View {
   get filter() { return shared("cc.inbox.filter") ?? "all"; }
 
   fixCi(p) {
-    const failed = p.failed[0];
-    run("tab.new", { space: p.space, name: `fix CI #${p.number}`, folder: p.repo, argv: this.claude, task: `/fix-ci ${failed?.url ?? p.url}` });
+    run("tab.new", { space: p.space, name: `fix CI #${p.number}`, folder: p.repo, argv: this.claude, task: fixCiTask(p) });
   }
 
   // A research agent in the shown space: it looks for the answer everywhere and drafts a reply, never posts.

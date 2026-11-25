@@ -10,6 +10,8 @@ import * as fs from "fs/promises";
 import { USAGE_EVERY, claudeUsage, codexUsage, backoff } from "./usage.js";
 import { withDefaults, patch, loadSettings, saveSettings, inHours } from "./settings.js";
 import { JIRA_CONNECTOR, JIRA_TIMEOUT, JIRA_READ, JIRA_WRITE, searchPrompt, movePrompt, readSearch, readMove } from "./jira.js";
+import { bitbucketClient, bitbucketRemote } from "./bitbucket.js";
+import { localRepos } from "./standup.js";
 
 // Claude Code lists connectors that need a sign-in here: a free way to know Jira or Slack isn't connected
 // before paying for a run that would find out. Not an official interface, so it's only a hint.
@@ -62,6 +64,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export default class CcStatus extends View {
   init(_props, cx) {
     this.roots = {};
+    this.remotes = {};
     this.busy = false;
     this.lastRun = 0;
     this.reviewsAt = 0;
@@ -188,7 +191,8 @@ export default class CcStatus extends View {
     const st = this.settings, now = Date.now(), hour = new Date().getHours();
     cx.spawn(async () => { await this.readSettings(); if (!st.repoRoots) await this.findAutoRoots(); });
     this.usage(cx);
-    if (st.github.enabled && now - this.lastRun >= st.github.everyMin * 60_000) this.refresh(cx, false);
+    // GitHub's interval also paces Bitbucket: one PR check covers both.
+    if ((st.github.enabled || st.bitbucket.enabled) && now - this.lastRun >= st.github.everyMin * 60_000) this.refresh(cx, false);
     // While a connector isn't connected, scheduled runs wait; opening the panel or Check again asks.
     const j = shared("cc.jira") ?? {};
     if (st.jira.enabled && !j.notConnected && inHours(hour, st.jira.hours)
@@ -243,7 +247,8 @@ export default class CcStatus extends View {
     this.publishStandup({ running: true, error: null });
     cx.spawn(async (cx) => {
       try {
-        const local = await gatherLocal(win);
+        const bb = this.settings.bitbucket.enabled ? await this.bitbucket().catch(() => null) : null;
+        const local = await gatherLocal(win, bb, this.settings.github.enabled);
         const jira = { ...this.settings.jira, site: this.settings.jira.site || shared("cc.jira")?.site || "" };
         const r = await this.claude(standupPrompt(win, local, jira), STANDUP_TOOLS, ["--json-schema", STANDUP_SCHEMA], STANDUP_TIMEOUT, this.settings.standup.model, "1");
         const out = JSON.parse(r.stdout || "{}");
@@ -435,6 +440,43 @@ export default class CcStatus extends View {
     }
   }
 
+  // The repo's origin URL, asked once per repo.
+  async remoteOf(repo) {
+    if (!(repo in this.remotes)) {
+      const r = await exec("git", ["remote", "get-url", "origin"], { cwd: repo }).catch(() => null);
+      this.remotes[repo] = r?.code === 0 ? r.stdout.trim() : "";
+    }
+    return this.remotes[repo];
+  }
+
+  // A Bitbucket session for one refresh (the token is read from the Keychain now), or null when there's no token.
+  // The client is kept only to remember who you are; the token never is.
+  async bitbucket() {
+    const keychain = this.settings.bitbucket.keychain;
+    if (this.bb?.keychain !== keychain) this.bb = { keychain, client: bitbucketClient({ run: exec, fetch, keychain }) };
+    return this.bb.client.session();
+  }
+
+  // What the Settings dialog shows about Bitbucket (shared "cc.bitbucket"): signed in as whom, no token yet, or the error.
+  publishBitbucket(bb, errors) {
+    const next = !this.settings.bitbucket.enabled ? { enabled: false }
+      : bb ? { enabled: true, user: bb.me?.username || bb.me?.display_name || "", error: null, missing: false }
+      : { enabled: true, user: null, error: errors.find((e) => e.startsWith("Bitbucket")) ?? null, missing: !errors.some((e) => e.startsWith("Bitbucket")) };
+    if (!same(next, shared("cc.bitbucket"))) setShared("cc.bitbucket", next);
+  }
+
+  // Bitbucket repos to look for review requests in: those open in Herdr and those under the repo folders
+  // (Bitbucket has no search across a workspace). The folder scan is kept for 30 minutes.
+  async bitbucketRepos(open) {
+    if (!this.scanned || Date.now() - this.scanned.at > 30 * 60_000) this.scanned = { at: Date.now(), repos: await localRepos().catch(() => []) };
+    const out = new Map(open);
+    for (const repo of this.scanned.repos) {
+      const remote = bitbucketRemote(await this.remoteOf(repo));
+      if (remote) out.set(`${remote.workspace}/${remote.repo}`, remote);
+    }
+    return [...out.values()];
+  }
+
   async repoOf(cwd) {
     if (!(cwd in this.roots)) {
       const r = await exec("git", ["rev-parse", "--show-toplevel"], { cwd }).catch(() => null);
@@ -463,29 +505,57 @@ export default class CcStatus extends View {
     if (this.busy) return;
     this.busy = true;
     this.lastRun = Date.now();
+    // Repos on bitbucket.org go to Bitbucket's API, the rest to gh. Both land in shared "cc.github" (the name the
+    // panels read), each entry with its host. A source that fails keeps its earlier results and shows its error.
     cx.spawn(async (cx) => {
+      const st = this.settings, errors = [];
+      const fail = (host) => (e) => { errors.push(`${host}: ${String(e?.message ?? e).split("\n")[0]}`); return null; };
       try {
         const prev = shared("cc.github") ?? {};
-        const prs = [];
+        const bb = st.bitbucket.enabled ? await this.bitbucket().catch(fail("Bitbucket")) : null;
+        this.publishBitbucket(bb, errors);
+        const prs = [], open = new Map();
         for (const t of await this.targets()) {
+          const remote = bitbucketRemote(await this.remoteOf(t.repo));
+          if (remote) {
+            open.set(`${remote.workspace}/${remote.repo}`, remote);
+            let pr = null, asked = false;
+            if (bb) { try { pr = await bb.pr(remote, t.branch); asked = true; } catch (e) { fail("Bitbucket")(e); } }
+            if (pr) prs.push({ ...t, host: "bitbucket", ...pr });
+            // Not asked (no session, or the call failed): keep what the last check found for this branch.
+            else if (!asked && st.bitbucket.enabled) prs.push(...(prev.prs ?? []).filter((p) => p.host === "bitbucket" && p.repo === t.repo && p.branch === t.branch));
+            continue;
+          }
+          if (!st.github.enabled) continue;
           const r = await exec("gh", ["pr", "view", t.branch, "--json", "number,title,url,state,isDraft,reviewDecision,statusCheckRollup"], { cwd: t.repo, timeout: 20_000 }).catch(() => null);
           if (r?.code !== 0) continue;
           const pr = JSON.parse(r.stdout);
           if (pr.state !== "OPEN") continue;
-          prs.push({ ...t, number: pr.number, title: pr.title, url: pr.url, draft: pr.isDraft, review: pr.reviewDecision, ...ciState(pr.statusCheckRollup) });
+          prs.push({ ...t, host: "github", number: pr.number, title: pr.title, url: pr.url, draft: pr.isDraft, review: pr.reviewDecision, ...ciState(pr.statusCheckRollup) });
         }
         let reviews = prev.reviews ?? [];
         if (forceReviews || Date.now() - this.reviewsAt >= REVIEWS_EVERY) {
-          // Direct requests by default: team requests (review-requested) can flood the list.
-          const scope = this.settings.github.reviews === "all" ? "--review-requested=@me" : "user-review-requested:@me";
-          const r = await exec("gh", ["search", "prs", scope, "--state=open", "--json", "number,title,url,repository,author", "--limit", "20"], { timeout: 20_000 });
-          if (r.code !== 0) throw new Error(r.stderr.trim().split("\n")[0] || "gh search failed");
-          reviews = JSON.parse(r.stdout).map((x) => ({ number: x.number, title: x.title, url: x.url, repo: x.repository?.nameWithOwner ?? "", author: x.author?.login ?? "" }));
+          const kept = (host) => (prev.reviews ?? []).filter((x) => (x.host ?? "github") === host);
+          let github = [], bitbucket = [];
+          if (st.github.enabled) {
+            // Direct requests by default: team requests (review-requested) can flood the list.
+            const scope = st.github.reviews === "all" ? "--review-requested=@me" : "user-review-requested:@me";
+            const r = await exec("gh", ["search", "prs", scope, "--state=open", "--json", "number,title,url,repository,author", "--limit", "20"], { timeout: 20_000 }).catch(() => null);
+            if (r?.code === 0) github = JSON.parse(r.stdout).map((x) => ({ host: "github", number: x.number, title: x.title, url: x.url, repo: x.repository?.nameWithOwner ?? "", author: x.author?.login ?? "" }));
+            else { github = kept("github"); fail("GitHub")(r?.stderr?.trim() || "gh search failed"); }
+          }
+          if (bb) {
+            for (const remote of await this.bitbucketRepos(open)) {
+              const found = await bb.reviews(remote).catch(fail("Bitbucket"));
+              bitbucket.push(...(found ?? kept("bitbucket").filter((x) => x.repo === `${remote.workspace}/${remote.repo}`)).map((x) => ({ host: "bitbucket", ...x })));
+            }
+          } else if (st.bitbucket.enabled) bitbucket = kept("bitbucket");
+          reviews = [...github, ...bitbucket];
           this.reviewsAt = Date.now();
         }
         const next = { prs, reviews };
         if (!same(next, { prs: prev.prs, reviews: prev.reviews })) setShared("cc.github", next);
-        this.error = null;
+        this.error = errors.length ? [...new Set(errors)].join(" · ").slice(0, 160) : null;
       } catch (e) {
         this.error = String(e?.message ?? e).slice(0, 120);
       } finally {
@@ -529,7 +599,8 @@ export default class CcStatus extends View {
     const list = agents();
     const needs = list.filter((a) => a.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
-    const sync = this.error ? `GitHub: ${this.error}` : this.busy ? "GitHub: checking…" : this.lastRun ? `GitHub ${ago(this.lastRun)}` : "GitHub";
+    const prLabel = this.settings.bitbucket.enabled ? "PRs" : "GitHub";
+    const sync = this.error ? `${prLabel}: ${this.error}` : this.busy ? `${prLabel}: checking…` : this.lastRun ? `${prLabel} ${ago(this.lastRun)}` : prLabel;
     const jira = shared("cc.jira") ?? {};
     const jiraSync = jira.running ? "Jira: checking…" : jira.notConnected ? "Jira: not connected" : jira.error ? "Jira: failed" : jira.at ? `Jira ${ago(jira.at)}` : "Jira";
     const sl = shared("cc.slack") ?? {};
@@ -549,7 +620,7 @@ export default class CcStatus extends View {
         .on_click((_e, cx) => { this.slack(cx, true); cx.notify(); }).child(slSync)))
       .when(st.jira.enabled, (el) => el.child(div().id("cc-jira-sync").text_color(jira.error || jira.notConnected ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => { this.jira(cx, true); cx.notify(); }).child(jiraSync)))
-      .when(st.github.enabled, (el) => el.child(div().id("cc-sync").text_color(this.error ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
+      .when(st.github.enabled || st.bitbucket.enabled, (el) => el.child(div().id("cc-sync").text_color(this.error ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); }).child(sync)))
       .child(div().id("cc-settings").text_color(this.settingsError ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click(() => openOverlay({ mod: "cc-settings", kind: "dialog", width: 640, height: 0.85 }))

@@ -20,6 +20,12 @@ function since(ms) {
 }
 // The issue key as a whole token in a branch name: ENG-41 matches eng-41-fix and feature/ENG-41, not eng-412.
 const hasKey = (branch, key) => new RegExp(`(?:^|[^a-z0-9])${key.replace(/[^\w-]/g, "")}(?![0-9])`, "i").test(branch ?? "");
+// Fix CI's first message: plain words rather than a /fix-ci command, so it works with no such command installed
+// and for GitHub and Bitbucket alike. Keep in step with cc-inbox.
+const fixCiTask = (p) => {
+  const checks = (p.failed ?? []).map((f) => `${f.name}${f.url ? ` (${f.url})` : ""}`).join(", ") || "a check";
+  return `CI failed on PR #${p.number} (${p.url}): ${checks}. Read the failing check's log; if its link needs a login you don't have, ask me to paste the log. Find the cause, fix it on this branch and run the relevant tests locally. Don't push: tell me what you changed.`;
+};
 const issueFor = (branch, issues) => {
   const b = (branch ?? "").toLowerCase();
   return b ? issues.find((i) => b === (i.branchName ?? "").toLowerCase() || hasKey(b, i.identifier)) ?? null : null;
@@ -95,7 +101,7 @@ export default class Board extends View {
 
   fixCi(card) {
     const p = card.pr;
-    run("tab.new", { space: p.space, name: `fix CI #${p.number}`, folder: p.repo, argv: this.claude, task: `/fix-ci ${p.failed[0]?.url ?? p.url}` });
+    run("tab.new", { space: p.space, name: `fix CI #${p.number}`, folder: p.repo, argv: this.claude, task: fixCiTask(p) });
     run("layout.select", { stack: "center", child: "main" });
   }
 
