@@ -244,7 +244,8 @@ export default class CcStatus extends View {
     cx.spawn(async (cx) => {
       try {
         const local = await gatherLocal(win);
-        const r = await this.claude(standupPrompt(win, local), STANDUP_TOOLS, ["--json-schema", STANDUP_SCHEMA], STANDUP_TIMEOUT, this.settings.standup.model, "1");
+        const jira = { ...this.settings.jira, site: this.settings.jira.site || shared("cc.jira")?.site || "" };
+        const r = await this.claude(standupPrompt(win, local, jira), STANDUP_TOOLS, ["--json-schema", STANDUP_SCHEMA], STANDUP_TIMEOUT, this.settings.standup.model, "1");
         const out = JSON.parse(r.stdout || "{}");
         const s = out.structured_output;
         if (!s?.text) throw new Error(String(out.result || s?.error || r.stderr || `claude exited ${r.code}`).split("\n")[0]);

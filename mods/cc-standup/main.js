@@ -93,7 +93,7 @@ export default class Standup extends View {
 
     const n = s.sources;
     const sub = s.running ? "Writing a new draft…" : s.error ? `Couldn't write it: ${s.error}`
-      : s.at ? `${s.date} · written ${clock(s.at)}${s.edited ? " · edited" : ""}${n ? ` · from ${plural(n.commits, "commit")}, ${plural(n.prs, "PR")}, ${plural(n.tasks, "task note")}, ${plural(n.asks ?? 0, "Slack ask")}, Linear and Slack` : ""}`
+      : s.at ? `${s.date} · written ${clock(s.at)}${s.edited ? " · edited" : ""}${n ? ` · from ${plural(n.commits, "commit")}, ${plural(n.prs, "PR")}, ${plural(n.tasks, "task note")}, ${plural(n.asks ?? 0, "Slack ask")}, Jira and Slack` : ""}`
       : "No draft yet";
     const askTarget = this.askFor && bullets.findIndex((b) => b.id === this.askFor);
 

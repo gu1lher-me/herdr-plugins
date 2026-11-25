@@ -1,14 +1,24 @@
 // Standup draft ("What did you accomplish?"): local facts (commits, PRs, task summaries) gathered here,
-// Linear and your own Slack messages read by one headless Sonnet run, which writes the text.
+// Jira and your own Slack messages read by one headless Sonnet run, which writes the text.
 
 import { exec, readTextFile, shared, home, appHome } from "herdr";
+import { jiraTool, siteStep } from "./jira.js";
 
 export const STANDUP_TIMEOUT = 420_000;
 export const STANDUP_TOOLS = [
   "ToolSearch",
-  "mcp__claude_ai_Linear__list_issues", "mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_comments", "mcp__claude_ai_Linear__whoami",
+  jiraTool("searchJiraIssuesUsingJql"), jiraTool("getJiraIssue"), jiraTool("getAccessibleAtlassianResources"),
   "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_read_thread", "mcp__claude_ai_Slack__slack_read_user_profile",
 ];
+
+const ymd = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+
+// The day's Jira work: issues of mine updated that day, and any whose status I changed. (Jira Cloud has no
+// "commented by" in plain JQL; the run reads comments from these.) Checked against Jira Cloud's JQL parser.
+export function standupJql(win) {
+  const from = win.date, to = ymd(new Date(win.to + 1));
+  return `(assignee = currentUser() AND updated >= "${from}" AND updated < "${to}") OR status CHANGED BY currentUser() DURING ("${from}", "${to}")`;
+}
 export const STANDUP_SCHEMA = JSON.stringify({ type: "object", required: ["text", "error"], properties: { text: { type: "string" }, error: { type: "string" } } });
 
 const DAY = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -22,7 +32,6 @@ export function windowFor(now = new Date(), cutover = 18) {
   }
   const from = new Date(d); from.setHours(0, 0, 0, 0);
   const to = new Date(d); to.setHours(23, 59, 59, 999);
-  const ymd = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
   return { key: ymd(d), date: ymd(d), label: DAY[d.getDay()], from: from.getTime(), to: to.getTime() };
 }
 
@@ -89,11 +98,13 @@ export async function gatherLocal(win) {
   return { commits: commits.slice(0, 80), prs, tasks: tasks.slice(0, 20), slack: slack.slice(0, 20) };
 }
 
-export function standupPrompt(win, local) {
+// jira: settings' jira, with the site the last fetch found when settings has none. Off: the run skips Jira.
+export function standupPrompt(win, local, jira = {}) {
   const list = (title, xs) => `${title}:\n${xs.length ? xs.map((x) => `- ${x}`).join("\n") : "(none)"}`;
+  const jiraStep = jira.enabled === false ? "1. Jira: skip it." : `1. Jira: ${siteStep(jira.site)} Call searchJiraIssuesUsingJql with jql ${JSON.stringify(standupJql(win))}, fields ["summary","status","comment"] and responseContentFormat "markdown". Use what I moved and what I commented that day. Read only.`;
   return `Write my standup answer to "What did you accomplish?" for ${win.label}, ${win.date}. Nobody reads a chat; your answer is the JSON.
-Load the Linear and Slack tools with ToolSearch, then:
-1. Linear: issues assigned to me or that I commented on or moved between ${win.date} 00:00 and 23:59 my time. Read only.
+Load the Jira and Slack tools with ToolSearch, then:
+${jiraStep}
 2. Slack: messages I sent in that window (from:me), for work that didn't leave a commit: reviews, debugging help, decisions. Read only.
 
 What I did locally that day:
@@ -105,7 +116,7 @@ ${list("Agent task summaries", local.tasks)}
 
 ${list("Slack asks I handled", local.slack)}
 
-Write 3 to 7 bullets, one line each, outcome first, grouped by ticket or project where it helps. Name Linear IDs and PR numbers.
+Write 3 to 7 bullets, one line each, outcome first, grouped by ticket or project where it helps. Name Jira keys and PR numbers.
 Merge the agent summaries with the commits instead of repeating them. Skip trivia (formatting, typo fixes, merges).
 A Slack ask earns a bullet only when it was real work (a review, a fix, a decision, an unblock); fold it into the matching
 project bullet when there is one, and leave out acknowledgements and quick answers.
@@ -152,7 +163,7 @@ export const ASK_SCHEMA = JSON.stringify({ type: "object", required: ["bullets"]
 export function askPrompt(state, instruction, id) {
   const list = (state.bullets ?? []).map((b, n) => `${n + 1}. ${b.text}`).join("\n");
   const n = (state.bullets ?? []).findIndex((b) => b.id === id);
-  const style = "One line each, outcome first, plain direct sentences, no filler or hype. Keep Linear IDs and PR numbers.";
+  const style = "One line each, outcome first, plain direct sentences, no filler or hype. Keep Jira keys and PR numbers.";
   return n >= 0
     ? `My standup draft for ${state.label} ("What did you accomplish?"):\n${list}\n\nChange only bullet ${n + 1}: ${instruction}\n${style}\nReturn bullets: the new text for bullet ${n + 1} alone (two items if I asked to split it, none if I asked to drop it). No leading dash.`
     : `My standup draft for ${state.label} ("What did you accomplish?"):\n${list}\n\nChange it: ${instruction}\n${style}\nKeep bullets my request doesn't touch word for word, in their order. Return the whole list as bullets, no leading dash.`;

@@ -7,6 +7,7 @@
 // deprecated v1 endpoint to v2) can change the name, so it lives here and nowhere else.
 export const JIRA_CONNECTOR = "Atlassian";
 const T = `mcp__claude_ai_${JIRA_CONNECTOR.replace(/\W/g, "_")}__`;
+export const jiraTool = (name) => `${T}${name}`;
 
 export const JIRA_TIMEOUT = 240_000;
 export const JIRA_READ = ["ToolSearch", `${T}searchJiraIssuesUsingJql`, `${T}getAccessibleAtlassianResources`];
@@ -16,7 +17,7 @@ const FIELDS = ["summary", "status", "priority", "issuetype", "description", "pr
 const MAX_PAGES = 4;
 
 // "Site" is the Jira host (you.atlassian.net). Empty: the run finds it, and cc-status saves what it found.
-const siteStep = (site) => site
+export const siteStep = (site) => site
   ? `Use cloudId "${site}".`
   : `First load getAccessibleAtlassianResources with ToolSearch too, call it, and use the url host of the site whose scopes include read:jira-work as cloudId.`;
 
