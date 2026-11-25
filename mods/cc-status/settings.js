@@ -7,7 +7,9 @@ import * as fs from "fs/promises";
 export const DEFAULTS = {
   repoRoots: null, // null: the parent folders of the repos open in Herdr
   github: { enabled: true, everyMin: 3, reviews: "direct" },
-  linear: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku" },
+  // site: the Jira host (you.atlassian.net); empty, the first fetch finds it and saves it. jql: empty for the default,
+  // your unresolved issues (DEFAULT_JQL in cc-status/jira.js).
+  jira: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku", site: "", jql: "" },
   slack: { enabled: false, everyMin: 60, hours: [9, 19], model: "sonnet" },
   standup: { enabled: false, times: [23], weekdaysOnly: true, cutover: 18, model: "sonnet" },
   usage: { claude: true, codex: true },

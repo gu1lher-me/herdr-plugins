@@ -9,11 +9,14 @@ import { STANDUP_TIMEOUT, STANDUP_TOOLS, STANDUP_SCHEMA, ASK_SCHEMA, windowFor, 
 import * as fs from "fs/promises";
 import { USAGE_EVERY, claudeUsage, codexUsage, backoff } from "./usage.js";
 import { withDefaults, patch, loadSettings, saveSettings, inHours } from "./settings.js";
+import { JIRA_CONNECTOR, JIRA_TIMEOUT, JIRA_READ, JIRA_WRITE, searchPrompt, movePrompt, readSearch, readMove } from "./jira.js";
 
-// Claude Code lists connectors that need a sign-in here: a free way to know Linear or Slack isn't connected
+// Claude Code lists connectors that need a sign-in here: a free way to know Jira or Slack isn't connected
 // before paying for a run that would find out. Not an official interface, so it's only a hint.
+// The name must end the key, so "Atlassian" doesn't match a separate, unconnected "claude.ai Atlassian MCP".
 async function needsAuth(name) {
-  try { return Object.keys(JSON.parse(await fs.readFile(`${home()}/.claude/mcp-needs-auth-cache.json`, "utf8"))).some((k) => k.includes(name)); }
+  const end = new RegExp(`(^|[\\s_])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+  try { return Object.keys(JSON.parse(await fs.readFile(`${home()}/.claude/mcp-needs-auth-cache.json`, "utf8"))).some((k) => end.test(k)); }
   catch { return false; }
 }
 
@@ -22,27 +25,6 @@ function find(node, id) {
   for (const child of node?.children ?? []) { const f = find(child, id); if (f) return f; }
   return null;
 }
-
-// Linear goes through the claude.ai connector in a headless claude run, so it's slow and costs a little:
-// on settings' schedule (linear.everyMin, linear.hours), or when asked (cc.linear.request).
-const LINEAR_TIMEOUT = 240_000;
-const LINEAR_READ = ["ToolSearch", "mcp__claude_ai_Linear__list_issues", "mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_teams", "mcp__claude_ai_Linear__get_user", "mcp__claude_ai_Linear__whoami"];
-const LINEAR_WRITE = ["ToolSearch", "mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_issue_statuses", "mcp__claude_ai_Linear__save_issue"];
-const LINEAR_SCHEMA = JSON.stringify({
-  type: "object", required: ["issues", "error", "connected"],
-  properties: {
-    error: { type: "string" }, connected: { type: "boolean" },
-    issues: { type: "array", items: { type: "object", required: ["identifier", "title", "state", "stateType", "url"], properties: {
-      identifier: { type: "string" }, title: { type: "string" }, state: { type: "string" }, stateType: { type: "string" },
-      priority: { type: "number" }, url: { type: "string" }, branchName: { type: "string" }, description: { type: "string" },
-      cycle: { type: "string" }, project: { type: "string" } } } },
-  },
-});
-const LINEAR_PROMPT = `List every Linear issue assigned to me that is not completed or canceled. Load the Linear tools with ToolSearch first.
-For each issue: identifier, title, state name, state type (backlog, unstarted, started or triage), priority number (0 none, 1 urgent, 2 high, 3 medium, 4 low), url, gitBranchName as branchName, the first 600 characters of the description, cycle name, project name.
-Read only: never create, change or comment on anything.
-connected: false when no Linear tools are available or they say I need to sign in; then return an empty list.
-If the Linear tools are there but keep failing, return an empty list and one short reason in error; otherwise error is "".`;
 
 const REVIEWS_EVERY = 5 * 60_000;
 const DEFAULT_BRANCHES = new Set(["main", "master", "develop", "trunk"]);
@@ -85,8 +67,8 @@ export default class CcStatus extends View {
     this.reviewsAt = 0;
     this.error = null;
     this.reading = new Set();
-    this.linearBusy = false;
-    this.handled = { request: shared("cc.linear.request") ?? 0, move: shared("cc.linear.move")?.at ?? 0,
+    this.jiraBusy = false;
+    this.handled = { request: shared("cc.jira.request") ?? 0, move: shared("cc.jira.move")?.at ?? 0,
       slackRequest: shared("cc.slack.request") ?? 0, slackAction: shared("cc.slack.action")?.at ?? 0 };
     this.slackBusy = false;
     this.slackPath = `${appHome()}/data/cc-slack/state.json`;
@@ -112,11 +94,11 @@ export default class CcStatus extends View {
       this.tick(cx);
     });
     cx.timer.every(60_000, (cx) => this.tick(cx));
-    // `herdr-app do cc-status.linear` / `cc-status.github`: check now.
+    // `herdr-app do cc-status.jira` / `cc-status.github`: check now.
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
-        if (c === "linear") this.linear(cx, true);
+        if (c === "jira") this.jira(cx, true);
         if (c === "github") this.refresh(cx, true);
         if (c === "slack") this.slack(cx, true);
         if (c === "standup") this.standup(cx);
@@ -208,9 +190,9 @@ export default class CcStatus extends View {
     this.usage(cx);
     if (st.github.enabled && now - this.lastRun >= st.github.everyMin * 60_000) this.refresh(cx, false);
     // While a connector isn't connected, scheduled runs wait; opening the panel or Check again asks.
-    const l = shared("cc.linear") ?? {};
-    if (st.linear.enabled && !l.notConnected && inHours(hour, st.linear.hours)
-      && now - Math.max(l.at ?? 0, l.failedAt ?? 0, this.linearStarted ?? 0) >= st.linear.everyMin * 60_000) this.linear(cx);
+    const j = shared("cc.jira") ?? {};
+    if (st.jira.enabled && !j.notConnected && inHours(hour, st.jira.hours)
+      && now - Math.max(j.at ?? 0, j.failedAt ?? 0, this.jiraStarted ?? 0) >= st.jira.everyMin * 60_000) this.jira(cx);
     // this.slackStarted also counts: a sweep whose result failed to save must not rerun every minute.
     const sl = shared("cc.slack") ?? {};
     if (st.slack.enabled && !sl.notConnected && inHours(hour, st.slack.hours)
@@ -306,11 +288,13 @@ export default class CcStatus extends View {
     });
   }
 
-  claude(prompt, tools, extra, timeout, model = "haiku", budget = "0.5") {
+  // format "stream-json" keeps every tool call and result in stdout, one JSON object per line (see jira.js).
+  claude(prompt, tools, extra, timeout, model = "haiku", budget = "0.5", format = "json") {
     const dir = `${appHome()}/data/cc-claude`;
     return exec("mkdir", ["-p", dir]).then(() => exec(`${home()}/.local/bin/claude`, [
       "-p", prompt, "--model", model, "--tools", "ToolSearch", "--allowedTools", tools.join(","),
-      "--output-format", "json", "--no-session-persistence", "--max-budget-usd", budget, ...extra,
+      "--output-format", format, ...(format === "stream-json" ? ["--verbose"] : []),
+      "--no-session-persistence", "--max-budget-usd", budget, ...extra,
     ], { cwd: dir, timeout }));
   }
 
@@ -374,45 +358,48 @@ export default class CcStatus extends View {
     });
   }
 
-  // forced: you asked (panel, Check again, status bar), so it runs even when Claude Code says Linear needs a sign-in.
-  linear(cx, forced = false) {
-    if (this.linearBusy) return;
-    this.linearBusy = true;
-    this.linearStarted = Date.now();
+  // forced: you asked (panel, Check again, status bar), so it runs even when Claude Code says Jira needs a sign-in.
+  jira(cx, forced = false) {
+    if (this.jiraBusy) return;
+    this.jiraBusy = true;
+    this.jiraStarted = Date.now();
     cx.spawn(async (cx) => {
-      const prev = shared("cc.linear") ?? {};
-      if (!forced && await needsAuth("Linear")) {
-        setShared("cc.linear", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
-        this.linearBusy = false;
+      const prev = shared("cc.jira") ?? {};
+      if (!forced && await needsAuth(JIRA_CONNECTOR)) {
+        setShared("cc.jira", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
+        this.jiraBusy = false;
         return;
       }
-      setShared("cc.linear", { ...prev, running: true });
+      setShared("cc.jira", { ...prev, running: true });
       try {
-        const r = await this.claude(LINEAR_PROMPT, LINEAR_READ, ["--json-schema", LINEAR_SCHEMA], LINEAR_TIMEOUT, this.settings.linear.model);
-        const out = JSON.parse(r.stdout || "{}");
-        const s = out.structured_output;
-        if (!s) throw new Error(String(out.result || r.stderr || `claude exited ${r.code}`).split("\n")[0]);
-        if (s.connected === false) setShared("cc.linear", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
-        else if (s.error) setShared("cc.linear", { ...prev, running: false, notConnected: false, error: s.error, failedAt: Date.now() });
-        else setShared("cc.linear", { issues: s.issues, at: Date.now(), running: false, notConnected: false, error: null });
+        const j = this.settings.jira;
+        const r = await this.claude(searchPrompt(j), JIRA_READ, [], JIRA_TIMEOUT, j.model, "0.5", "stream-json");
+        const s = readSearch(r.stdout, r.stderr || (r.code ? `claude exited ${r.code}` : ""));
+        if (s.notConnected) setShared("cc.jira", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
+        else if (s.error) setShared("cc.jira", { ...prev, running: false, notConnected: false, error: s.error, failedAt: Date.now() });
+        else {
+          setShared("cc.jira", { issues: s.issues, site: s.site, partial: s.partial, at: Date.now(), running: false, notConnected: false, error: null });
+          // The first fetch with no site set found it: saved, so later runs skip that lookup.
+          if (!j.site && s.site) setShared("cc.settings.update", { at: Date.now(), patch: { jira: { site: s.site } } });
+        }
       } catch (e) {
-        setShared("cc.linear", { ...prev, running: false, error: String(e?.message ?? e).slice(0, 160), failedAt: Date.now() });
+        setShared("cc.jira", { ...prev, running: false, error: String(e?.message ?? e).slice(0, 160), failedAt: Date.now() });
       } finally {
-        this.linearBusy = false;
+        this.jiraBusy = false;
         cx.notify();
       }
     });
   }
 
-  // Start from issue asks for this; the dialog closes before a headless run could finish.
+  // Start from issue asks for this; the dialog closes before a headless run could finish. Whether the issue moved
+  // is read from transitionJiraIssue's own result, not from what the model says.
   moveToStarted(cx, identifier) {
     cx.spawn(async (cx) => {
-      const prompt = `Move Linear issue ${identifier} to its team's "In Progress" state (or the team's first state of type started). Change nothing else: no comments, no other fields. Reply with one short sentence.`;
-      const r = await this.claude(prompt, LINEAR_WRITE, [], 180_000).catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
-      let ok = r.code === 0, text = "";
-      try { const o = JSON.parse(r.stdout); ok = ok && !o.is_error; text = o.result ?? ""; } catch { ok = false; }
-      notify({ title: ok ? `${identifier} moved to In Progress` : `Couldn't move ${identifier}`, body: ok ? undefined : (text || r.stderr || "").slice(0, 160), level: ok ? "success" : "warning" });
-      this.linear(cx);
+      const prompt = movePrompt({ site: this.settings.jira.site, identifier });
+      const r = await this.claude(prompt, JIRA_WRITE, [], 180_000, "haiku", "0.5", "stream-json").catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+      const { ok, said } = readMove(r.stdout);
+      notify({ title: ok ? `${identifier} moved to In Progress` : `Couldn't move ${identifier}`, body: ok ? undefined : (said || r.stderr || "").slice(0, 160), level: ok ? "success" : "warning" });
+      this.jira(cx);
     });
   }
 
@@ -430,8 +417,8 @@ export default class CcStatus extends View {
         if (!next.repoRoots) await this.findAutoRoots();
       });
     }
-    const request = shared("cc.linear.request") ?? 0, move = shared("cc.linear.move");
-    if (request > this.handled.request) { this.handled.request = request; this.linear(cx, true); }
+    const request = shared("cc.jira.request") ?? 0, move = shared("cc.jira.move");
+    if (request > this.handled.request) { this.handled.request = request; this.jira(cx, true); }
     if (move?.at > this.handled.move) { this.handled.move = move.at; this.moveToStarted(cx, move.identifier); }
     const ureq = shared("cc.usage.request") ?? 0;
     if (ureq > (this.handled.usage ?? 0)) { this.handled.usage = ureq; this.usage(cx, true); }
@@ -542,8 +529,8 @@ export default class CcStatus extends View {
     const needs = list.filter((a) => a.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
     const sync = this.error ? `GitHub: ${this.error}` : this.busy ? "GitHub: checking…" : this.lastRun ? `GitHub ${ago(this.lastRun)}` : "GitHub";
-    const lin = shared("cc.linear") ?? {};
-    const linSync = lin.running ? "Linear: checking…" : lin.notConnected ? "Linear: not connected" : lin.error ? "Linear: failed" : lin.at ? `Linear ${ago(lin.at)}` : "Linear";
+    const jira = shared("cc.jira") ?? {};
+    const jiraSync = jira.running ? "Jira: checking…" : jira.notConnected ? "Jira: not connected" : jira.error ? "Jira: failed" : jira.at ? `Jira ${ago(jira.at)}` : "Jira";
     const sl = shared("cc.slack") ?? {};
     const asks = (sl.items ?? []).filter((i) => i.kind === "ask" && !i.ticked).length;
     const slSync = sl.running ? "Slack: sweeping…" : sl.notConnected ? "Slack: not connected" : sl.error ? "Slack: failed" : sl.lastAt ? `Slack ${ago(sl.lastAt)}` : "Slack";
@@ -559,8 +546,8 @@ export default class CcStatus extends View {
         .child(div().font_semibold().text_color(t.blocked).child(String(asks))).child("Slack to do")))
       .when(st.slack.enabled, (el) => el.child(div().id("cc-slack-sync").text_color(sl.error || sl.notConnected ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => { this.slack(cx, true); cx.notify(); }).child(slSync)))
-      .when(st.linear.enabled, (el) => el.child(div().id("cc-linear-sync").text_color(lin.error || lin.notConnected ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
-        .on_click((_e, cx) => { this.linear(cx, true); cx.notify(); }).child(linSync)))
+      .when(st.jira.enabled, (el) => el.child(div().id("cc-jira-sync").text_color(jira.error || jira.notConnected ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
+        .on_click((_e, cx) => { this.jira(cx, true); cx.notify(); }).child(jiraSync)))
       .when(st.github.enabled, (el) => el.child(div().id("cc-sync").text_color(this.error ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => { this.refresh(cx, true); cx.notify(); }).child(sync)))
       .child(div().id("cc-settings").text_color(this.settingsError ? t.blocked : t.dim).hover((s) => s.text_color(t.foreground))
