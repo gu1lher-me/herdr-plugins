@@ -5,6 +5,8 @@
 // for each refresh, sent only to api.bitbucket.org, and never stored or published.
 // No Herdr imports: run (exec-like: (cmd, args, opts) => { code, stdout, stderr }) and fetch are passed in.
 
+import { readKeychain, basicAuth, query } from "./keychain.js";
+
 const API = "https://api.bitbucket.org/2.0";
 const FAILED = new Set(["FAILED", "STOPPED"]);
 
@@ -13,19 +15,6 @@ export function bitbucketRemote(url) {
   const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?(?:ssh\.)?bitbucket\.org[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(String(url ?? "").trim());
   return m ? { workspace: m[1], repo: m[2] } : null;
 }
-
-// Base64 by hand: the mod runtime may have no btoa, Buffer or TextEncoder. Emails and API tokens are ASCII.
-function base64(s) {
-  const bytes = [...String(s)].map((c) => c.charCodeAt(0) & 255), abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 3) {
-    const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
-    out += abc[(n >> 18) & 63] + abc[(n >> 12) & 63] + (i + 1 < bytes.length ? abc[(n >> 6) & 63] : "=") + (i + 2 < bytes.length ? abc[n & 63] : "=");
-  }
-  return out;
-}
-
-const query = (params) => Object.entries(params).flatMap(([k, v]) => [].concat(v).map((x) => `${encodeURIComponent(k)}=${encodeURIComponent(x)}`)).join("&");
 
 // A PR's checks, as ciState does for GitHub: { ci: none|pending|pass|fail, failed: [{ name, url }] }.
 export function buildState(statuses) {
@@ -46,19 +35,9 @@ export function reviewState(participants) {
 export function bitbucketClient({ run, fetch, keychain = "herdr-bitbucket" }) {
   let me = null;
 
-  // The Keychain item's account (your email) and its secret. null: no item, so Bitbucket stays quiet.
-  async function credentials() {
-    const item = await run("/usr/bin/security", ["find-generic-password", "-s", keychain], { timeout: 5000 }).catch(() => null);
-    if (item?.code !== 0) return null;
-    const user = /"acct"<blob>="([^"]*)"/.exec(item.stdout)?.[1];
-    const secret = await run("/usr/bin/security", ["find-generic-password", "-s", keychain, "-w"], { timeout: 5000 }).catch(() => null);
-    const token = secret?.code === 0 ? secret.stdout.replace(/\n$/, "") : "";
-    return user && token ? { user, token } : null;
-  }
-
   async function get(auth, path, params = {}) {
     const qs = query(params);
-    const res = await fetch(`${API}${path}${qs ? `?${qs}` : ""}`, { headers: { Authorization: `Basic ${base64(`${auth.user}:${auth.token}`)}`, Accept: "application/json" } });
+    const res = await fetch(`${API}${path}${qs ? `?${qs}` : ""}`, { headers: { Authorization: basicAuth(auth), Accept: "application/json" } });
     if (!res.ok) {
       const e = new Error(res.status === 401 ? "Bitbucket refused the token (401): check it in the Keychain"
         : res.status === 403 ? "the Bitbucket token is missing a scope (403)" : `Bitbucket answered ${res.status}`);
@@ -70,7 +49,8 @@ export function bitbucketClient({ run, fetch, keychain = "herdr-bitbucket" }) {
 
   // Everything a refresh needs, with the token read once. null when there's no token.
   async function session() {
-    const auth = await credentials();
+    // No Keychain item: Bitbucket stays quiet.
+    const auth = await readKeychain(run, keychain);
     if (!auth) return null;
     me ??= await get(auth, "/user", { fields: "uuid,display_name,username" });
     const repoPath = (r) => `/repositories/${encodeURIComponent(r.workspace)}/${encodeURIComponent(r.repo)}`;

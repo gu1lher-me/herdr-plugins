@@ -13,7 +13,10 @@ export const DEFAULTS = {
   // site: the Jira host (you.atlassian.net); empty, the first fetch finds it and saves it. jql: empty for the default,
   // your unresolved issues (DEFAULT_JQL in cc-status/jira.js). branchPattern: Start's new branch name, with {key}
   // (eng-412), {KEY} (ENG-412) and {slug} (the title), e.g. "feature/jd/{key}-{slug}".
-  jira: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku", site: "", jql: "", branchPattern: "{key}-{slug}" },
+  // keychain: the Keychain item with a Jira-scoped Atlassian API token (read:jira-work, write:jira-work,
+  // read:jira-user; your Atlassian email as the account). With one, Jira is read through its REST API, free;
+  // without, through Claude's Atlassian connector (model is that run's).
+  jira: { enabled: true, everyMin: 15, hours: [7, 22], model: "haiku", site: "", jql: "", branchPattern: "{key}-{slug}", keychain: "herdr-jira" },
   slack: { enabled: false, everyMin: 60, hours: [9, 19], model: "sonnet" },
   standup: { enabled: false, times: [23], weekdaysOnly: true, cutover: 18, model: "sonnet" },
   usage: { claude: true, codex: true },

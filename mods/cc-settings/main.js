@@ -19,7 +19,8 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 
 export function dailyCost(s) {
   const runs = (x) => (x.enabled ? (span(x.hours) * 60) / x.everyMin : 0);
-  const jira = runs(s.jira) * RUN.jira[s.jira.model];
+  // Read with an API token (shared cc.jira via "api"), Jira costs nothing.
+  const jira = shared("cc.jira")?.via === "api" ? 0 : runs(s.jira) * RUN.jira[s.jira.model];
   const slack = runs(s.slack) * RUN.slack[s.slack.model];
   const standup = s.standup.enabled ? s.standup.times.length * RUN.standup[s.standup.model] : 0;
   return { jira, slack, standup, total: jira + slack + standup };
@@ -43,6 +44,19 @@ export default class Settings extends View {
     const jira = { ...this.draft.jira, site, jql: this.jql.value().trim(), branchPattern: this.branch.value().trim() || "{key}-{slug}" };
     setShared("cc.settings.update", { patch: { ...this.draft, jira, repoRoots: roots.length ? roots : null }, at: Date.now() });
     closeOverlay(props()?.overlay);
+  }
+
+  // How Jira is read: the API token (free), or the connector with how to add a token; from cc-status's last fetch.
+  jiraStatus(t, keychain) {
+    const j = shared("cc.jira") ?? {};
+    const line = (text, color) => div().pb(4).text_size(12).text_color(color).line_height(1.5).child(text);
+    if (j.via === "api" && !j.error) return line(`Read with your API token${j.user ? ` as ${j.user}` : ""}: free. Token: Keychain item "${keychain}".`, t.muted);
+    if (j.via === "api") return line(`${j.error}. The token is the Keychain item "${keychain}".`, t.blocked);
+    return v_flex().pb(4).gap(4)
+      .child(line(j.via === "connector" ? "Read through Claude's Atlassian connector: about 1¢ a run." : "Not read yet.", t.muted))
+      .child(line(`For free reads: an Atlassian API token with scopes, app Jira (read:jira-work, write:jira-work, read:jira-user), copied, then in Terminal:`, t.dim))
+      .child(div().text_size(11.5).font_family("monospace").text_color(t.foreground)
+        .child(`printf 'add-generic-password -U -s ${keychain} -a YOUR_ATLASSIAN_EMAIL -w %s\\n' "$(pbpaste)" | security -i; pbcopy < /dev/null`));
   }
 
   // Signed in, no token yet (with how to add one), or what went wrong: from cc-status's last PR check.
@@ -101,8 +115,9 @@ export default class Settings extends View {
         ]))
         .child(card("bb", "Bitbucket", "PR checks for repos on bitbucket.org and review requests in your repo folders, through Bitbucket's API. Free; checked as often as GitHub.",
           d.bitbucket.enabled, () => { d.bitbucket.enabled = !d.bitbucket.enabled; }, [this.bitbucketStatus(t, d.bitbucket.keychain)]))
-        .child(card("jira", "Jira", "Your open issues, through Claude's Atlassian connector.", d.jira.enabled, () => { d.jira.enabled = !d.jira.enabled; }, [
-          row("Check every", every("jira", [15, 30, 60])),
+        .child(card("jira", "Jira", "Your open issues, through Jira's API with a token (free), else Claude's Atlassian connector.", d.jira.enabled, () => { d.jira.enabled = !d.jira.enabled; }, [
+          this.jiraStatus(t, d.jira.keychain ?? "herdr-jira"),
+          row("Check every", every("jira", [5, 15, 30, 60])),
           row("Between", hours("jira")),
           row("Model", seg("jira-model", MODELS, d.jira.model, (v) => { d.jira.model = v; }), "Haiku is enough: it only runs the search"),
           row("Site", Input.new(this.site).h(30).px(10).rounded(7).border_1().border_color(t.input).bg(t.popover).text_size(12.5)),

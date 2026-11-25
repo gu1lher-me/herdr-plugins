@@ -15,10 +15,11 @@ export const STANDUP_TOOLS = [
 const ymd = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 
 // The day's Jira work: issues of mine updated that day, and any whose status I changed. (Jira Cloud has no
-// "commented by" in plain JQL; the run reads comments from these.) Checked against Jira Cloud's JQL parser.
+// "commented by" in plain JQL; comments are read from these.) Times, not bare dates: DURING ("d", "d+1") takes in
+// all of d+1. Checked against Jira Cloud's JQL parser; times are in your Jira profile's time zone.
 export function standupJql(win) {
-  const from = win.date, to = ymd(new Date(win.to + 1));
-  return `(assignee = currentUser() AND updated >= "${from}" AND updated < "${to}") OR status CHANGED BY currentUser() DURING ("${from}", "${to}")`;
+  const d = win.date;
+  return `(assignee = currentUser() AND updated >= "${d} 00:00" AND updated <= "${d} 23:59") OR status CHANGED BY currentUser() DURING ("${d} 00:00", "${d} 23:59")`;
 }
 export const STANDUP_SCHEMA = JSON.stringify({ type: "object", required: ["text", "error"], properties: { text: { type: "string" }, error: { type: "string" } } });
 
@@ -109,7 +110,9 @@ export async function gatherLocal(win, bb = null, github = true) {
 // jira: settings' jira, with the site the last fetch found when settings has none. Off: the run skips Jira.
 export function standupPrompt(win, local, jira = {}) {
   const list = (title, xs) => `${title}:\n${xs.length ? xs.map((x) => `- ${x}`).join("\n") : "(none)"}`;
-  const jiraStep = jira.enabled === false ? "1. Jira: skip it." : `1. Jira: ${siteStep(jira.site)} Call searchJiraIssuesUsingJql with jql ${JSON.stringify(standupJql(win))}, fields ["summary","status","comment"] and responseContentFormat "markdown". Use what I moved and what I commented that day. Read only.`;
+  const jiraStep = jira.enabled === false ? "1. Jira: skip it."
+    : local.jira ? `1. Jira: already read for you, under "Jira issues I worked on" below. Don't call any Jira tool.`
+    : `1. Jira: ${siteStep(jira.site)} Call searchJiraIssuesUsingJql with jql ${JSON.stringify(standupJql(win))}, fields ["summary","status","comment"] and responseContentFormat "markdown". Use what I moved and what I commented that day. Read only.`;
   return `Write my standup answer to "What did you accomplish?" for ${win.label}, ${win.date}. Nobody reads a chat; your answer is the JSON.
 Load the Jira and Slack tools with ToolSearch, then:
 ${jiraStep}
@@ -119,6 +122,7 @@ What I did locally that day:
 ${list("Commits", local.commits)}
 
 ${list("Pull requests I opened or updated", local.prs)}
+${local.jira ? `\n${list("Jira issues I worked on (updated, or status changed by me, that day)", local.jira)}\n` : ""}
 
 ${list("Agent task summaries", local.tasks)}
 

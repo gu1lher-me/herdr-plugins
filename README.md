@@ -14,8 +14,9 @@ GitHub only.
 ![The Board, with the Tasks panel](docs/board.png)
 
 Needs macOS (the Keychain, `pbcopy`), the Herdr app, Node and Claude Code; `gh` signed in for GitHub repos and a
-Bitbucket API token (below) for Bitbucket ones. Jira and Slack are read through the claude.ai connectors (Atlassian and
-Slack), so connect those in claude.ai if you want them. Jira Cloud only: that's what the Atlassian connector reaches.
+Bitbucket API token (below) for Bitbucket ones. Jira Cloud is read with a Jira API token (below, free) or, without
+one, through the claude.ai Atlassian connector; Slack through the claude.ai Slack connector. Connect those in
+claude.ai if you want them.
 
 Both screenshots are made by `node scripts/preview.mjs` from made-up data (`scripts/preview/demo.json`) in a
 separate Herdr window with its own home folder and herdr-core, so it never touches your spaces or logins.
@@ -34,23 +35,28 @@ it installed itself (marked `.cc-managed`), and binds ⌘⌥1 and ⌘⌥2 (Termi
 Jira, Tasks) in `keys.json`, leaving any key you already use. Over an install of the Linear version it removes
 `cc-linear` and its ⌘⌥L binding.
 
-### Bitbucket token
+### API tokens (Bitbucket, Jira)
 
-Repos whose `origin` is on bitbucket.org get their PRs through Bitbucket's REST API with an Atlassian API token:
+Two Atlassian API tokens, each made at id.atlassian.com → Security → API tokens → **Create API token with scopes**
+(a token with scopes works for the one app it's made for):
 
-1. At id.atlassian.com → Security → API tokens, **Create API token with scopes**, app **Bitbucket**, with
-   `read:user:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket` and `read:pipeline:bitbucket`.
-2. Copy it and store it in the Keychain, your Atlassian email as the account:
+| Keychain item | App | Scopes | For |
+|---|---|---|---|
+| `herdr-bitbucket` | Bitbucket | `read:user:bitbucket`, `read:repository:bitbucket`, `read:pullrequest:bitbucket`, `read:pipeline:bitbucket` | PRs and builds of repos on bitbucket.org |
+| `herdr-jira` | Jira | `read:jira-work`, `write:jira-work` (only for Move to In Progress), `read:jira-user` | Jira for free, instead of Claude runs through the connector |
 
-   ```sh
-   printf 'add-generic-password -U -s herdr-bitbucket -a you@example.com -w %s\n' "$(pbpaste)" | security -i; pbcopy < /dev/null
-   ```
+Copy each and store it in the Keychain, your Atlassian email as the account:
 
-   Not `security add-generic-password … -w` with a prompt: macOS cuts what you type there at 128 characters, and
-   these tokens are longer. This way the token stays out of your shell history too.
+```sh
+printf 'add-generic-password -U -s herdr-jira -a you@example.com -w %s\n' "$(pbpaste)" | security -i; pbcopy < /dev/null
+```
 
-The token is read from the Keychain for each check, sent only to `api.bitbucket.org`, and never written anywhere.
-Settings → Bitbucket shows whether it's signed in.
+Not `security add-generic-password … -w` with a prompt: macOS cuts what you type there at 128 characters, and
+these tokens are longer. This way the token stays out of your shell history too.
+
+Tokens are read from the Keychain when used, sent only to `api.bitbucket.org` or `api.atlassian.com` (tokens with
+scopes only work there; the plugin gets your site's cloud id from its public `/_edge/tenant_info`), and never
+written anywhere. Settings shows whether each is in use.
 
 ## Settings
 
@@ -61,7 +67,7 @@ minute). The installer writes it only when it's missing. New installs start with
 |---|---|---|
 | GitHub | on, every 3 min, review requests asked of you | free (`gh`) |
 | Bitbucket | on (quiet until there's a token), with GitHub's interval | free (REST API) |
-| Jira | on, every 15 min, 07–22, Haiku; your unresolved issues | under 1¢ a run |
+| Jira | on, every 15 min (5 is fine with a token), 07–22; your unresolved issues | free with a Jira token; else a Haiku run, under 1¢ |
 | Slack sweep | **off**; when on, hourly, 09–19, Sonnet | 30–45¢ a run on Sonnet |
 | Standup draft | **off**; when on, 23:00 on weekdays, Sonnet | about 25¢ a run |
 | Repo folders | the folders of the repos open in Herdr | |
@@ -100,8 +106,14 @@ Bitbucket has no workspace-wide search); and `hc read` once when an agent become
 `main`/`master` branches are skipped. Click the PRs time in the status bar to check now. A failed check keeps the
 last results and shows its error there.
 
-Jira is read through the claude.ai Atlassian connector: a headless `claude -p` (read-only tools, $0.50 cap) on the
-schedule in settings, or when you click refresh. The model only calls Jira's search; the issues are read from that
+Jira, with a Jira token (`mods/cc-status/jira-api.js`): Jira Cloud's REST API on the schedule in settings, or when
+you click refresh; Start from issue's full issue (asked of cc-status through shared state), Move to In Progress
+(a transition to the status named In Progress, else the first in that category) and the standup's Jira facts too.
+Descriptions and comments arrive as Atlassian Document Format and are turned into Markdown (`adf.js`). A token
+that fails shows its error instead of falling back to paid runs.
+
+Jira without a token goes through the claude.ai Atlassian connector: a headless `claude -p` (read-only tools, $0.50
+cap). The model only calls Jira's search; the issues are read from that
 tool's own answer in the run's output, not from what the model writes, so text inside an issue can't change the
 list. Moving an issue to In Progress is a second run with Jira's transition tools, only when you tick it in Start
 from issue; whether it moved is read from Jira's answer too. The runs work in `~/.config/herdr-app/data/cc-claude`
@@ -123,7 +135,7 @@ Monday), or for today from 18:00. Your commits in every repo under the Start dia
 Bitbucket's API for Bitbucket repos), the day's task summaries and the Slack asks you closed (marked Done, or replied
 to; never skipped ones, kept two weeks even after Clear) are gathered locally; one Sonnet run (about $0.25) adds Jira
 (your issues updated that day and the ones whose status you changed, with their comments) and your own Slack
-messages and writes it. It runs at the times in settings (before the "new day from" hour it writes the previous
+messages and writes it (with a Jira token, the Jira part is read beforehand and given to the run as facts). It runs at the times in settings (before the "new day from" hour it writes the previous
 working day, after it today), catches up a missed time within 12 hours if Herdr was closed or asleep, and runs on
 demand from Write now in the Inbox footer or `herdr-app do cc-status.standup`. Once you edit a day's draft, the
 schedule leaves it alone; Write now still replaces it (Undo brings yours back). Asking Claude to change it is one

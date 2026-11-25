@@ -130,15 +130,43 @@ export default class Start extends View {
       cx.notify();
     });
     this.scan(cx, true);
+    cx.timer.every(250, (cx) => this.answered(cx));
     this.load(cx);
   }
 
+  // With a Jira API token, cc-status reads the issue (free, a second or two): ask it through shared state.
+  // Otherwise, or if it says there's no token or doesn't answer in 20 seconds, read it through the connector here.
   load(cx) {
     const i = props().issue;
     // Demo issues (scripts/preview.mjs) aren't in Jira.
     if (shared("cc.settings")?.demo) return this.message.set_value(firstMessage(i, { description: i.description ?? "", comments: [] }));
     this.loading = true;
     this.loadError = "";
+    if (shared("cc.jira")?.via === "api") {
+      this.asked = { key: i.identifier, at: Date.now() };
+      cx.spawn(async () => { setShared("cc.jira.issue.request", this.asked); });
+      return;
+    }
+    this.loadViaClaude(cx);
+  }
+
+  // cc-status's answer to load()'s request, checked on the timer.
+  answered(cx) {
+    if (!this.asked) return;
+    const a = shared("cc.jira.issue");
+    const late = Date.now() - this.asked.at > 20_000;
+    if (a?.at !== this.asked.at && !late) return;
+    this.asked = null;
+    if (a?.full || a?.error) {
+      if (a.error) this.loadError = a.error.replace(/\.$/, "");
+      this.message.set_value(firstMessage(props().issue, a.full ?? null));
+      this.loading = false;
+      cx.notify();
+    } else this.loadViaClaude(cx);
+  }
+
+  loadViaClaude(cx) {
+    const i = props().issue;
     cx.spawn(async (cx) => {
       try { this.message.set_value(firstMessage(i, await fetchIssue(i))); }
       catch (e) {

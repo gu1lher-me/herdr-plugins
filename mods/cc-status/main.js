@@ -10,8 +10,9 @@ import * as fs from "fs/promises";
 import { USAGE_EVERY, claudeUsage, codexUsage, backoff } from "./usage.js";
 import { withDefaults, patch, loadSettings, saveSettings, inHours } from "./settings.js";
 import { JIRA_CONNECTOR, JIRA_TIMEOUT, JIRA_READ, JIRA_WRITE, searchPrompt, movePrompt, readSearch, readMove } from "./jira.js";
+import { jiraApiClient } from "./jira-api.js";
 import { bitbucketClient, bitbucketRemote } from "./bitbucket.js";
-import { localRepos } from "./standup.js";
+import { localRepos, standupJql } from "./standup.js";
 
 // Claude Code lists connectors that need a sign-in here: a free way to know Jira or Slack isn't connected
 // before paying for a run that would find out. Not an official interface, so it's only a hint.
@@ -71,7 +72,7 @@ export default class CcStatus extends View {
     this.error = null;
     this.reading = new Set();
     this.jiraBusy = false;
-    this.handled = { request: shared("cc.jira.request") ?? 0, move: shared("cc.jira.move")?.at ?? 0,
+    this.handled = { request: shared("cc.jira.request") ?? 0, move: shared("cc.jira.move")?.at ?? 0, issue: shared("cc.jira.issue.request")?.at ?? 0,
       slackRequest: shared("cc.slack.request") ?? 0, slackAction: shared("cc.slack.action")?.at ?? 0 };
     this.slackBusy = false;
     this.slackPath = `${appHome()}/data/cc-slack/state.json`;
@@ -249,6 +250,9 @@ export default class CcStatus extends View {
       try {
         const bb = this.settings.bitbucket.enabled ? await this.bitbucket().catch(() => null) : null;
         const local = await gatherLocal(win, bb, this.settings.github.enabled);
+        // With a Jira token the day's Jira work is read here, free, and the run gets it as facts.
+        const api = this.settings.jira.enabled ? await this.jiraApi().catch(() => null) : null;
+        if (api) local.jira = await api.dayWork(standupJql(win), win.from, win.to).catch(() => undefined);
         const jira = { ...this.settings.jira, site: this.settings.jira.site || shared("cc.jira")?.site || "" };
         const r = await this.claude(standupPrompt(win, local, jira), STANDUP_TOOLS, ["--json-schema", STANDUP_SCHEMA], STANDUP_TIMEOUT, this.settings.standup.model, "1");
         const out = JSON.parse(r.stdout || "{}");
@@ -371,6 +375,27 @@ export default class CcStatus extends View {
     this.jiraStarted = Date.now();
     cx.spawn(async (cx) => {
       const prev = shared("cc.jira") ?? {};
+      // A Jira API token (settings jira.keychain) and a site: Jira's REST API, free. A token that fails shows its
+      // error rather than quietly paying for a connector run. No token or no site: the connector, as below.
+      let api = null;
+      try { api = await this.jiraApi(); } catch (e) {
+        setShared("cc.jira", { ...prev, running: false, notConnected: false, via: "api", error: String(e?.message ?? e).slice(0, 160), failedAt: Date.now() });
+        this.jiraBusy = false;
+        return cx.notify();
+      }
+      if (api) {
+        setShared("cc.jira", { ...prev, running: true });
+        try {
+          const s = await api.issues(this.settings.jira.jql);
+          setShared("cc.jira", { issues: s.issues, site: s.site, partial: s.partial, at: Date.now(), running: false, notConnected: false, error: null, via: "api", user: api.me?.displayName ?? "" });
+        } catch (e) {
+          setShared("cc.jira", { ...prev, running: false, via: "api", error: String(e?.message ?? e).slice(0, 160), failedAt: Date.now() });
+        } finally {
+          this.jiraBusy = false;
+          cx.notify();
+        }
+        return;
+      }
       if (!forced && await needsAuth(JIRA_CONNECTOR)) {
         setShared("cc.jira", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
         this.jiraBusy = false;
@@ -384,8 +409,8 @@ export default class CcStatus extends View {
         if (s.notConnected) setShared("cc.jira", { ...prev, running: false, notConnected: true, error: null, failedAt: Date.now() });
         else if (s.error) setShared("cc.jira", { ...prev, running: false, notConnected: false, error: s.error, failedAt: Date.now() });
         else {
-          setShared("cc.jira", { issues: s.issues, site: s.site, partial: s.partial, at: Date.now(), running: false, notConnected: false, error: null });
-          // The first fetch with no site set found it: saved, so later runs skip that lookup.
+          setShared("cc.jira", { issues: s.issues, site: s.site, partial: s.partial, at: Date.now(), running: false, notConnected: false, error: null, via: "connector" });
+          // The first fetch with no site set found it: saved, so later runs skip that lookup (and can use a token).
           if (!j.site && s.site) setShared("cc.settings.update", { at: Date.now(), patch: { jira: { site: s.site } } });
         }
       } catch (e) {
@@ -397,15 +422,45 @@ export default class CcStatus extends View {
     });
   }
 
-  // Start from issue asks for this; the dialog closes before a headless run could finish. Whether the issue moved
-  // is read from transitionJiraIssue's own result, not from what the model says.
+  // A Jira API session (the token read from the Keychain now), or null with no token or no site yet: then the
+  // connector does the work. The client is kept only to remember the cloud id and who you are.
+  async jiraApi() {
+    const { keychain = "herdr-jira", site } = this.settings.jira;
+    if (this.jiraClient?.keychain !== keychain) this.jiraClient = { keychain, client: jiraApiClient({ run: exec, fetch, keychain }) };
+    return this.jiraClient.client.session(site || shared("cc.jira")?.site || "");
+  }
+
+  // Start from issue asks for this; the dialog closes before a headless run could finish. With a token it's one
+  // API call. Through the connector, whether the issue moved is read from transitionJiraIssue's own result, not
+  // from what the model says.
   moveToStarted(cx, identifier) {
     cx.spawn(async (cx) => {
-      const prompt = movePrompt({ site: this.settings.jira.site || shared("cc.jira")?.site || "", identifier });
-      const r = await this.claude(prompt, JIRA_WRITE, [], 180_000, "haiku", "0.5", "stream-json").catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
-      const { ok, said } = readMove(r.stdout);
-      notify({ title: ok ? `${identifier} moved to In Progress` : `Couldn't move ${identifier}`, body: ok ? undefined : (said || r.stderr || "").slice(0, 160), level: ok ? "success" : "warning" });
+      let ok, said = "", stderr = "";
+      const api = await this.jiraApi().catch((e) => { said = String(e?.message ?? e); return null; });
+      if (api) ({ ok, said } = await api.moveToStarted(identifier).catch((e) => ({ ok: false, said: String(e?.message ?? e) })));
+      else if (said) ok = false;
+      else {
+        const prompt = movePrompt({ site: this.settings.jira.site || shared("cc.jira")?.site || "", identifier });
+        const r = await this.claude(prompt, JIRA_WRITE, [], 180_000, "haiku", "0.5", "stream-json").catch((e) => ({ code: 1, stdout: "", stderr: String(e) }));
+        ({ ok, said } = readMove(r.stdout));
+        stderr = r.stderr ?? "";
+      }
+      notify({ title: ok ? `${identifier} moved to In Progress` : `Couldn't move ${identifier}`, body: ok ? undefined : (said || stderr).slice(0, 160), level: ok ? "success" : "warning" });
       this.jira(cx);
+    });
+  }
+
+  // The Start dialog's request for a whole issue (shared "cc.jira.issue.request" { key, at }), answered as
+  // "cc.jira.issue" { at, key, full } or { at, key, error }, or { at, key, unavailable } with no token, so the
+  // dialog reads it through the connector itself.
+  answerIssue(cx, req) {
+    cx.spawn(async () => {
+      const reply = { at: req.at, key: req.key };
+      try {
+        const api = await this.jiraApi();
+        if (api) reply.full = await api.issue(req.key); else reply.unavailable = true;
+      } catch (e) { reply.error = String(e?.message ?? e).slice(0, 160); }
+      setShared("cc.jira.issue", reply);
     });
   }
 
@@ -426,6 +481,8 @@ export default class CcStatus extends View {
     const request = shared("cc.jira.request") ?? 0, move = shared("cc.jira.move");
     if (request > this.handled.request) { this.handled.request = request; this.jira(cx, true); }
     if (move?.at > this.handled.move) { this.handled.move = move.at; this.moveToStarted(cx, move.identifier); }
+    const ireq = shared("cc.jira.issue.request");
+    if (ireq?.at > this.handled.issue) { this.handled.issue = ireq.at; this.answerIssue(cx, ireq); }
     const ureq = shared("cc.usage.request") ?? 0;
     if (ureq > (this.handled.usage ?? 0)) { this.handled.usage = ureq; this.usage(cx, true); }
     const streq = shared("cc.standup.request") ?? 0;
